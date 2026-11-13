@@ -17,9 +17,12 @@ class HistoryActivity final : public ui::Screen {
 
  private:
   void onEnter() override;
-  void render(RenderLock&&) override;
+  std::string title() const override { return "Hist\xC3\xB3rico"; }
+  void build(ui::Ui& ui) override;
   void onAction(int id) override;
-  bool onSideButton(MappedInputManager::Button b) override;
+  void onRow(int row) override;
+  bool onKey(MappedInputManager::Button b) override;
+  int listCount() const override { return static_cast<int>(sessions.size()); }
   void load();
   void shiftMonth(int delta);
 
@@ -27,8 +30,6 @@ class HistoryActivity final : public ui::Screen {
   int64_t nowRef = 0, offset = 0;
   std::vector<HistorySession> sessions;
   int cardTotal = 0;
-  int page = 0, perPage = 1;
-  bool firstRender = true;
 };
 
 class HistorySessionActivity final : public ui::Screen {
@@ -38,15 +39,15 @@ class HistorySessionActivity final : public ui::Screen {
 
  private:
   void onEnter() override;
-  void render(RenderLock&&) override;
-  void onAction(int id) override;
-  bool onSideButton(MappedInputManager::Button b) override;
+  std::string title() const override;
+  std::string subtitle() const override;
+  void build(ui::Ui& ui) override;
+  int listCount() const override { return static_cast<int>(session.cards.size()); }
 
   int64_t lineOffset;
   HistorySession session;
   bool ok = false;
   int64_t nowRef = 0, offset = 0;
-  int page = 0, perPage = 1;
 };
 
 }  // namespace linguetta

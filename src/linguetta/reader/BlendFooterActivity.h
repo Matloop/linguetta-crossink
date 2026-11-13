@@ -13,7 +13,7 @@
 
 #include "activities/Activity.h"
 #include "linguetta/core/Blend.h"
-#include "linguetta/ui/Ui.h"
+#include "linguetta/ui/Screen.h"
 
 namespace linguetta {
 
@@ -32,11 +32,11 @@ struct BlendTap {
   std::string language;
 };
 
-class BlendFooterActivity final : public Activity {
+class BlendFooterActivity final : public ui::Screen {
  public:
   BlendFooterActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Page> page,
                       int marginLeft, int marginTop, BlendTap tap)
-      : Activity("LinguettaBlendFooter", renderer, mappedInput),
+      : ui::Screen("LinguettaBlendFooter", renderer, mappedInput),
         page(std::move(page)),
         marginLeft(marginLeft),
         marginTop(marginTop),
@@ -44,8 +44,12 @@ class BlendFooterActivity final : public Activity {
 
  private:
   void onEnter() override;
-  void loop() override;
-  void render(RenderLock&&) override;
+  std::string title() const override { return ""; }
+  bool hasChrome() const override { return false; }
+  void backdrop() override;
+  void build(ui::Ui& ui) override;
+  void onAction(int id) override;
+  void onBack() override { close(); }
   void save();
   void close();
   void lookUp();          // fills mode/bank* for `language`
@@ -61,7 +65,6 @@ class BlendFooterActivity final : public Activity {
   std::string koHash;    // the book's KOSync hash (Obra key, books.json key)
   std::vector<std::string> languages;  // study languages the word could go to
   std::string bankLemma, bankSense, bankPos, nextReview, status;
-  ui::Box strip, saveBox, closeBox, langBox;
 };
 
 }  // namespace linguetta

@@ -36,23 +36,30 @@ class DeckListActivity final : public ui::Screen {
       : ui::Screen("LinguettaDecks", renderer, mappedInput) {}
 
  private:
+  // One row of the list: a deck, or "Sincronizar" / "Histórico".
+  struct Row {
+    enum class Kind { Deck, Sync, History } kind = Kind::Deck;
+    int deck = -1;  // index in `decks`
+    std::string label, subtitle, value, heading;
+  };
+
   void onEnter() override;
-  void render(RenderLock&&) override;
-  void onAction(int id) override;
+  std::string title() const override { return "Flashcards"; }
+  std::string subtitle() const override;
+  void build(ui::Ui& ui) override;
+  int listCount() const override { return static_cast<int>(rows.size()); }
+  void onRow(int row) override;
   void onBack() override;
-  bool onSideButton(MappedInputManager::Button b) override;
   void reload();
   void openDeck(size_t i);
 
   std::vector<Deck> decks;
+  std::vector<Row> rows;
   int total = 0;
   bool clockOk = false;
   bool paired = false;
   int queued = 0;  // outbox operations waiting for the next sync
-  int page = 0, pages = 1;
-  std::vector<int> pageStart;  // first row of each page (rows have different heights)
   std::string status;
-  bool firstRender = true;
 };
 
 }  // namespace linguetta

@@ -20,9 +20,9 @@
 
 namespace linguetta {
 
-namespace {
-enum : int { ID_BACK = 9000, ID_HISTORY = 9001, ID_PREV = 9002, ID_NEXT = 9003, ID_SYNC = 9004 };
+namespace fui = freeink::ui;
 
+namespace {
 std::string plural(int n, const char* one, const char* many) { return std::to_string(n) + (n == 1 ? one : many); }
 
 // "58 cartões · 20 para hoje" (or "· nada para hoje"); "Estudar tudo": "14 para hoje · 4 novas de 10".
@@ -40,7 +40,7 @@ std::string deckSummary(const DeckListActivity::Deck& d) {
   return s + " \xC2\xB7 " + std::to_string(d.count) + " para hoje";
 }
 
-constexpr int SUBDECK_INDENT = 28;
+const char* const SUBDECK_PREFIX = "    ";  // subdecks sit under their parent
 }  // namespace
 
 std::unique_ptr<Activity> makeDeckListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput) {
@@ -48,14 +48,8 @@ std::unique_ptr<Activity> makeDeckListActivity(GfxRenderer& renderer, MappedInpu
 }
 
 void DeckListActivity::onEnter() {
-  Activity::onEnter();
+  Screen::onEnter();
   reload();
-  for (size_t i = 0; i < decks.size(); i++) {
-    if (!decks[i].section) {
-      setFocus(static_cast<int>(i));
-      break;
-    }
-  }
   requestUpdate();
 }
 
@@ -121,7 +115,7 @@ void DeckListActivity::reload() {
       d.linguetta = true;
       d.language = lang;
       d.deck = k;
-      d.indent = hdr.decks[k].parent >= 0 ? SUBDECK_INDENT : 0;
+      d.indent = hdr.decks[k].parent >= 0 ? 1 : 0;
       d.cards = view.cardCount(k);
       if (clockOk) d.count = view.counts(now, k).total();
       decks.push_back(std::move(d));
@@ -152,126 +146,82 @@ void DeckListActivity::reload() {
   }
   paired = svc.state().paired();
   queued = countOutbox(svc.fs()).total();
-}
 
-void DeckListActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-  clearTargets();
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  target(ui::header(renderer, "Flashcards"), ID_BACK, false);
-
-  int y = ui::headerH() + 18;
-  if (clockOk) {
-    const std::string title = (total == 0 ? std::string("Nada") : std::to_string(total)) + " para hoje";
-    renderer.drawText(ui::fontTitle(), ui::MARGIN, y, title.c_str(), true, EpdFontFamily::BOLD);
-    y += renderer.getLineHeight(ui::fontTitle());
-  } else {
-    renderer.drawText(ui::fontTitle(), ui::MARGIN, y, "Rel\xC3\xB3gio n\xC3\xA3o acertado", true, EpdFontFamily::BOLD);
-    y += renderer.getLineHeight(ui::fontTitle());
-    y = ui::paragraph(renderer, ui::fontSmall(), ui::MARGIN, y, w - 2 * ui::MARGIN,
-                      "Conecte ao Wi-Fi (Sincronizar) para acertar a hora antes de revisar.", 2);
-  }
-  // No "Decks" label: the title says what is due and the rows need the room.
-  y += 12;
-
-  // Bottom block: status line, "Navegação", Sincronizar and Histórico.
-  const int navH = ui::sectionH(renderer) + 2 * ui::ROW_H + ui::ROW_GAP + 20;
-  const int statusH = status.empty() ? 0 : renderer.getLineHeight(ui::fontSmall()) * 2 + 6;
-  const int listBottom = h - navH - statusH;
-  const int pagerH = 44 + 8;
-  const int count = static_cast<int>(decks.size());
-  auto rowH = [&](int i) { return decks[i].section ? ui::sectionH(renderer) : ui::ROW2_H + ui::ROW_GAP; };
-
-  // Pages by height; with more than one page the pager takes the bottom of the list.
-  auto paginate = [&](int bottom) {
-    pageStart.assign(1, 0);
-    int used = 0;
-    for (int i = 0; i < count; i++) {
-      const int rh = rowH(i);
-      // A section label never ends a page.
-      const int need = rh + (decks[i].section && i + 1 < count ? rowH(i + 1) : 0);
-      // The last row's gap may run into the bottom margin.
-      if (used > 0 && used + need > bottom - y + ui::ROW_GAP) {
-        pageStart.push_back(i);
-        used = 0;
-      }
-      used += rh;
-    }
-  };
-  paginate(listBottom);
-  if (pageStart.size() > 1) paginate(listBottom - pagerH);
-  pages = static_cast<int>(pageStart.size());
-  page = std::clamp(page, 0, std::max(0, pages - 1));
-
-  const int first = pageStart[page], last = page + 1 < pages ? pageStart[page + 1] : count;
-  for (int i = first; i < last; i++) {
+  rows.clear();
+  std::string heading;
+  for (size_t i = 0; i < decks.size(); i++) {
     const Deck& d = decks[i];
     if (d.section) {
-      y = ui::section(renderer, y, d.name);
+      heading = d.name;
       continue;
     }
-    const ui::Box b = target(ui::row2(renderer, y, d.name, deckSummary(d), true, d.indent, d.all), i);
-    if (focused(i)) drawFocus(b);
-    y += ui::ROW2_H + ui::ROW_GAP;
+    Row r;
+    r.deck = static_cast<int>(i);
+    r.label = std::string(d.indent > 0 ? SUBDECK_PREFIX : "") + d.name;
+    r.subtitle = deckSummary(d);
+    r.heading = std::move(heading);
+    heading.clear();
+    rows.push_back(std::move(r));
   }
-  if (pages > 1) {
-    ui::Box prev, next;
-    const std::string label = std::to_string(page + 1) + " / " + std::to_string(pages);
-    ui::pager(renderer, listBottom - 44 - 4, label, prev, next);
-    target(prev, ID_PREV, false);
-    target(next, ID_NEXT, false);
-  }
-
-  int by = listBottom;
-  if (!status.empty()) {
-    ui::paragraph(renderer, ui::fontSmall(), ui::MARGIN, by, w - 2 * ui::MARGIN, status, 2, true, EpdFontFamily::BOLD);
-    by += statusH;
-  }
-  by = ui::section(renderer, by, "Navega\xC3\xA7\xC3\xA3o");
-  const std::string syncRight = !paired ? "Parear" : queued > 0 ? std::to_string(queued) + " na fila" : "";
-  const ui::Box sb = target(ui::row(renderer, by, "Sincronizar", syncRight), ID_SYNC);
-  if (focused(ID_SYNC)) drawFocus(sb);
-  by += ui::ROW_H + ui::ROW_GAP;
-  const ui::Box hb = target(ui::row(renderer, by, "Hist\xC3\xB3rico"), ID_HISTORY);
-  if (focused(ID_HISTORY)) drawFocus(hb);
-
-  renderer.displayBuffer(firstRender ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-  firstRender = false;
+  Row sync;
+  sync.kind = Row::Kind::Sync;
+  sync.label = "Sincronizar";
+  sync.value = !paired ? "Parear" : queued > 0 ? std::to_string(queued) + " na fila" : "";
+  sync.heading = "Navega\xC3\xA7\xC3\xA3o";
+  rows.push_back(std::move(sync));
+  Row history;
+  history.kind = Row::Kind::History;
+  history.label = "Hist\xC3\xB3rico";
+  rows.push_back(std::move(history));
+  selected = std::min(selected, static_cast<int>(rows.size()) - 1);
 }
 
-bool DeckListActivity::onSideButton(MappedInputManager::Button b) {
-  if (b != MappedInputManager::Button::Left && b != MappedInputManager::Button::Right) return false;
-  if (pages <= 1) return false;
-  page = (page + (b == MappedInputManager::Button::Right ? 1 : pages - 1)) % pages;
-  int f = page < static_cast<int>(pageStart.size()) ? pageStart[page] : 0;
-  while (f < static_cast<int>(decks.size()) && decks[f].section) f++;
-  setFocus(f);
-  requestUpdate();
-  return true;
+std::string DeckListActivity::subtitle() const {
+  if (!clockOk) return "";
+  return total == 0 ? "Nada hoje" : std::to_string(total) + " hoje";
 }
 
-void DeckListActivity::onAction(int id) {
-  if (id == ID_BACK) {
-    onBack();
-  } else if (id == ID_PREV || id == ID_NEXT) {
-    onSideButton(id == ID_NEXT ? MappedInputManager::Button::Right : MappedInputManager::Button::Left);
-  } else if (id == ID_SYNC) {
+void DeckListActivity::build(ui::Ui& ui) {
+  // The first row carries what the screen needs to say before the decks: a failed start, or the
+  // clock the review needs.
+  const std::string notice = !status.empty() ? status : !clockOk ? "Rel\xC3\xB3gio n\xC3\xA3o acertado" : "";
+  std::vector<ui::fui::ListItem> items;
+  items.reserve(rows.size());
+  for (size_t i = 0; i < rows.size(); i++) {
+    const Row& r = rows[i];
+    ui::fui::ListItem item;
+    item.label = r.label.c_str();
+    if (!r.subtitle.empty()) item.subtitle = r.subtitle.c_str();
+    if (!r.value.empty()) item.value = r.value.c_str();
+    if (i == 0 && !notice.empty()) {
+      item.sectionHeading = notice.c_str();
+    } else if (!r.heading.empty()) {
+      item.sectionHeading = r.heading.c_str();
+    }
+    items.push_back(item);
+  }
+  list(ui, items, UiListRowType::WithSubtitle, true);
+}
+
+void DeckListActivity::onRow(const int row) {
+  if (row < 0 || row >= static_cast<int>(rows.size())) return;
+  const Row& r = rows[row];
+  if (r.kind == Row::Kind::Sync) {
     status.clear();
     auto act = makeUniqueNoThrow<SyncActivity>(renderer, mappedInput);
     if (act) {
       startActivityForResult(std::move(act), [this](const ActivityResult&) {
         reload();
-        firstRender = true;
+        requestFullRefresh();
         requestUpdate();
       });
     }
-  } else if (id == ID_HISTORY) {
+  } else if (r.kind == Row::Kind::History) {
     status.clear();
     auto act = makeUniqueNoThrow<HistoryActivity>(renderer, mappedInput);
     if (act) startActivityForResult(std::move(act), [this](const ActivityResult&) { requestUpdate(); });
-  } else if (id >= 0 && id < static_cast<int>(decks.size()) && !decks[id].section) {
-    setFocus(id);
-    openDeck(static_cast<size_t>(id));
+  } else {
+    openDeck(static_cast<size_t>(r.deck));
   }
 }
 
@@ -290,7 +240,7 @@ void DeckListActivity::openDeck(size_t i) {
   }
   startActivityForResult(std::move(act), [this](const ActivityResult&) {
     reload();
-    firstRender = true;
+    requestFullRefresh();
     requestUpdate();
   });
 }

@@ -15,7 +15,7 @@ code here was written for this branch or is upstream CrossPoint.
 | `src/linguetta/device/` | ESP32 glue: `HalFs` (SD), `Service` (state, trusted clock, view cache), `SyncHttp` (upstream `freeink::SecureHttpClient`). |
 | `src/linguetta/reader/` | Blend footer over the reader page (save / seen), Word Lens drawing and taps (`WordLensReader`), page words in reading order (`PageWords.h`). |
 | `src/linguetta/flashcards/` | Deck list, review, session summary, history, Sincronizar. |
-| `src/linguetta/ui/` | Small screen kit (header, rows, buttons, tap targets). |
+| `src/linguetta/ui/` | `Screen`: base of the flashcard screens, a FreeInkUI app like CrossInk's own activities (theme tokens, fonts from "uiScale", `TouchHeaderBackButton` / `GUI.drawHeader`, GUI button hints, FreeInkUI list, button, metric card, progress bar, sheet). `Ui.h`: the flashcard word and IPA fonts, the reader highlight. |
 | `test/linguetta/` | Host tests (GoogleTest) and the contract fixtures copied from the server repo. |
 
 SD card: `/.linguetta/{bank/<language>.jsonl, outbox.jsonl, state.json, rejected.jsonl, history.jsonl, settings.json, wordlens.json, imports.json, decks/, cache/}` and TSV/CSV decks in `/flashcards`.
@@ -44,7 +44,7 @@ the `src` glob) and `test/linguetta/`. Every change is marked `Linguetta` so a C
 CrossInk differences handled in `src/linguetta/`: `TextBlock` keeps no source offsets, so `PageWords.h` derives
 paragraph starts and glued words from the line layout; no `replaceFile`, so `HalFs::replace` renames through a
 `.bak`; no `TrustedTime`, so the clock is `gettimeofday` plus `halClock.syncFromNTP()`; no `fillRectDither`
-ink-preserving mode, so `ui::shade`; Noto Sans 12-18 pt are gone, the screens use Inter (`UI_10`/`UI_12`/`SMALL`).
+ink-preserving mode, so `ui::shade`; Noto Sans 12-18 pt are gone.
 
 ## Tests
 
@@ -169,3 +169,16 @@ CROSSPOINT_SIM_INPUT_SCRIPT='2500:TAP:140,340;6000:QUIT' \
 The fake SD is case-sensitive on Linux: decks go in `flashcards/`, not `FLASHCARDS/`.
 `scripts/simulator_c17.py` pins C to gnu17 (GCC 15's C23 default breaks QRCode).
 The stock smoke test also passes: `python3 scripts/run_simulator_smoke_test.py --env x4-pro-simulator`.
+
+## Screens
+
+All flashcard screens (`DeckListActivity`, `ReviewActivity`, `HistoryActivity`, `SyncActivity`) and the
+blend/lens footer (a FreeInkUI `sheet`) derive from `ui::Screen` and use only CrossInk components, so fonts,
+row heights, header, button hints, selection style and colours follow the user's "uiScale" and UI theme.
+Only the flashcard word (28 pt) and the IPA line use Linguetta's own fonts.
+
+- List screens (decks, history, one session) return `listCount()`: the direction buttons move the
+  selection, swipes scroll, Confirm and taps call `onRow()`. Section headings are `ListItem::sectionHeading`.
+- Button screens (review, sync) draw `button()`s; the direction buttons move the focus, Confirm or a tap
+  calls `onAction(id)`. The main action of a screen is the inverted button.
+- The "N hoje" count and "Faltam N" are the header's right label.

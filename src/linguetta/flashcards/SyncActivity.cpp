@@ -23,9 +23,11 @@
 
 namespace linguetta {
 
+namespace fui = freeink::ui;
+
 namespace {
 
-enum : int { ID_BACK = 9000, ID_PRIMARY = 9001, ID_SECONDARY = 9002 };
+enum : int { ID_PRIMARY = 1, ID_SECONDARY = 2 };
 
 constexpr uint32_t NTP_TIMEOUT_MS = 5000;
 constexpr unsigned long REDRAW_MS = 2000;  // progress redraws during the sync
@@ -61,7 +63,7 @@ int64_t SyncActivity::clockMs() const {
 }
 
 void SyncActivity::onEnter() {
-  Activity::onEnter();
+  Screen::onEnter();
   loadQueue();
   startPending = true;  // blocking work starts from the loop, once this screen is current
   requestUpdate();
@@ -105,7 +107,7 @@ void SyncActivity::openWifi() {
   }
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& r) {
-                           firstRender = true;
+                           requestFullRefresh();
                            afterWifi(!r.isCancelled);
                          });
 }
@@ -147,7 +149,7 @@ void SyncActivity::startPairing() {
     phase = Phase::Pairing;
     setFocus(ID_SECONDARY);
   }
-  firstRender = true;
+  requestFullRefresh();
   requestUpdate();
 }
 
@@ -220,7 +222,7 @@ void SyncActivity::poll() {
           phase = Phase::OtherAccount;
           setFocus(ID_SECONDARY);
         }
-        firstRender = true;
+        requestFullRefresh();
         requestUpdate();
       } else {
         acceptPairing(false);
@@ -256,7 +258,7 @@ void SyncActivity::doSync() {
     pushDone = pushTotal = recvDone = recvTotal = 0;
     resultText.clear();
   }
-  firstRender = true;
+  requestFullRefresh();
   requestUpdateAndWait();
   lastDraw = millis();
 
@@ -358,7 +360,7 @@ void SyncActivity::fail(const SyncError& e, bool offline) {
     phase = Phase::Offline;
     setFocus(ID_PRIMARY);
   }
-  firstRender = true;
+  requestFullRefresh();
   requestUpdate();
 }
 
@@ -382,7 +384,7 @@ void SyncActivity::loadQueue() {
 // ---- input ----
 
 void SyncActivity::onAction(int id) {
-  if (id == ID_BACK || id == ID_SECONDARY) {
+  if (id == ID_SECONDARY) {
     finish();
     return;
   }
@@ -410,95 +412,93 @@ void SyncActivity::onAction(int id) {
 
 // ---- drawing ----
 
-void SyncActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-  clearTargets();
+std::string SyncActivity::title() const {
   const bool pairing = phase == Phase::Pairing || phase == Phase::PairEnded || phase == Phase::OtherAccount;
-  target(ui::header(renderer, pairing ? "Conectar ao Linguetta" : "Sincronizar"), ID_BACK, false);
-  const int y = ui::headerH() + 18;
+  return pairing ? "Conectar ao Linguetta" : "Sincronizar";
+}
+
+void SyncActivity::build(ui::Ui& ui) {
   switch (phase) {
     case Phase::NeedWifi:
-      renderNeedWifi(y);
+      buildNeedWifi(ui);
       break;
     case Phase::Wifi:
-      ui::message(renderer, ui::screenH(renderer) / 2 - 40, "Conectando\xE2\x80\xA6");
+      ui.centeredText("Conectando\xE2\x80\xA6", ui.theme().bodyText);
       break;
     case Phase::Pairing:
     case Phase::PairEnded:
     case Phase::OtherAccount:
-      renderPairing(y);
+      buildPairing(ui);
       break;
     case Phase::Syncing:
     case Phase::Done:
-      renderSyncing(y);
+      buildSyncing(ui);
       break;
     case Phase::Offline:
-      renderOffline(y);
+      buildOffline(ui);
       break;
   }
-  renderer.displayBuffer(firstRender ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-  firstRender = false;
 }
 
-void SyncActivity::renderPairing(int y) {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  const int contentW = w - 2 * ui::MARGIN;
-  const ui::Box bottom{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, contentW, ui::BUTTON_H};
+void SyncActivity::buildPairing(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  const int w = renderer.getScreenWidth();
+  const int side = sidePadding();
 
   if (phase == Phase::Pairing) {
-    renderer.drawCenteredText(ui::fontLarge(), y, "Escaneie com o celular");
-    y += renderer.getLineHeight(ui::fontLarge()) + 12;
-    const int qr = 250;
-    QrUtils::drawQrCode(renderer, Rect((w - qr) / 2, y, qr, qr), code.verificationUriComplete);
-    y += qr + 16;
-    const std::string open = "ou abra " + displayUri(code.verificationUri) + " e digite";
-    const std::string line = renderer.truncatedText(ui::fontSmall(), open.c_str(), contentW);
-    renderer.drawCenteredText(ui::fontSmall(), y, line.c_str());
-    y += renderer.getLineHeight(ui::fontSmall()) + 8;
-    renderer.drawCenteredText(ui::fontTitle(), y, code.userCode.c_str(), true, EpdFontFamily::BOLD);
-    y += renderer.getLineHeight(ui::fontTitle()) + 10;
+    bottomButton(ui, "Cancelar", ID_SECONDARY);
+    if (focusedId() < 0) setFocus(ID_SECONDARY);
+    paragraph(ui, "Escaneie com o celular", 1, true, fui::TextAlign::Center);
+    ui.spacer(theme.spaceMd);
+    // The QR code takes what the lines below leave, up to 250 px.
+    const int below = renderer.getLineHeight(fontFor(0)) * 2 + renderer.getLineHeight(fontFor(2)) + theme.spaceMd * 3;
+    const int qr = std::max(120, std::min(250, static_cast<int>(ui.body().height) - below));
+    const fui::Rect qrBand = ui.takeTop(static_cast<int16_t>(qr), theme.spaceMd);
+    QrUtils::drawQrCode(renderer, Rect((w - qr) / 2, qrBand.y, qr, qr), code.verificationUriComplete);
+    paragraph(ui, "ou abra " + displayUri(code.verificationUri) + " e digite", 0, false, fui::TextAlign::Center);
+    const fui::Rect codeRow = ui.takeTop(static_cast<int16_t>(renderer.getLineHeight(fontFor(2))), theme.spaceSm);
+    ui.target().text(codeRow, code.userCode.c_str(), style(ui, 2, true, fui::TextAlign::Center));
     const unsigned long now = millis();
     const long left = static_cast<long>(expiresAt - now) > 0 ? static_cast<long>(expiresAt - now) / 1000 : 0;
     char buf[64];
     snprintf(buf, sizeof buf, "Aguardando aprova\xC3\xA7\xC3\xA3o \xC2\xB7 expira em %ld:%02ld", left / 60, left % 60);
-    renderer.drawCenteredText(ui::fontSmall(), y, buf);
-    const ui::Box b = target(ui::button(renderer, bottom, "Cancelar", false), ID_SECONDARY);
-    if (focused(ID_SECONDARY)) drawFocus(b);
+    paragraph(ui, buf, 0, false, fui::TextAlign::Center);
     return;
   }
 
-  std::string title, text, primary;
+  std::string heading, text, primary;
   if (phase == Phase::PairEnded) {
-    title = pairEndTitle;
+    heading = pairEndTitle;
     text = pairEndText;
     primary = "Gerar outro c\xC3\xB3" "digo";
   } else {
     const SyncState& st = Service::get().state();
     const int queued = queueSaves + queueReviews + queueSeen;
-    title = "Outra conta";
+    heading = "Outra conta";
     text = "Este cart\xC3\xA3o tem dados de " + (st.account.email.empty() ? std::string("outra conta") : st.account.email) +
            ". Para usar " + approved.account.email + ", o banco e a fila deste cart\xC3\xA3o (" +
            plural(queued, "opera\xC3\xA7\xC3\xA3o", "opera\xC3\xA7\xC3\xB5" "es") + ") ser\xC3\xA3o apagados.";
     primary = "Apagar e continuar";
   }
-  renderer.drawText(ui::fontTitle(), ui::MARGIN, y, title.c_str(), true, EpdFontFamily::BOLD);
-  y += renderer.getLineHeight(ui::fontTitle()) + 8;
-  ui::paragraph(renderer, ui::fontBody(), ui::MARGIN, y, contentW, text, 8);
-  const ui::Box second = target(ui::button(renderer, bottom, "Cancelar", false), ID_SECONDARY);
-  ui::Box first = bottom;
-  first.y -= ui::BUTTON_H + 12;
-  first = target(ui::button(renderer, first, primary, true), ID_PRIMARY);
-  if (focused(ID_PRIMARY)) drawFocus(first);
-  if (focused(ID_SECONDARY)) drawFocus(second);
+  bottomButton(ui, "Cancelar", ID_SECONDARY);
+  const fui::Rect r = ui.takeBottom(theme.rowHeight, theme.spaceMd);
+  button(ui, fui::Rect{static_cast<int16_t>(r.x + side), r.y, static_cast<int16_t>(r.width - 2 * side), r.height},
+         primary.c_str(), ID_PRIMARY, true);
+  if (focusedId() < 0) setFocus(ID_PRIMARY);
+  paragraph(ui, heading, 2, true);
+  ui.spacer(theme.spaceSm);
+  paragraph(ui, text, 1, false, fui::TextAlign::Left, 8);
 }
 
-void SyncActivity::renderSyncing(int y) {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  const int contentW = w - 2 * ui::MARGIN;
-  const int arrow = 20, textX = ui::MARGIN + arrow + 10;
-  renderer.drawText(ui::fontTitle(), ui::MARGIN, y,
-                    phase == Phase::Done ? "Sincronizado" : "Sincronizando\xE2\x80\xA6", true, EpdFontFamily::BOLD);
-  y += renderer.getLineHeight(ui::fontTitle()) + 18;
+void SyncActivity::buildSyncing(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  const int side = sidePadding();
+  if (phase == Phase::Done) {
+    bottomButton(ui, "Concluir", ID_PRIMARY, true);
+    if (focusedId() < 0) setFocus(ID_PRIMARY);
+  }
+  paragraph(ui, phase == Phase::Done ? "Sincronizado" : "Sincronizando\xE2\x80\xA6", 2, true);
+  ui.spacer(theme.spaceMd);
 
   std::vector<std::string> parts;
   if (queueItems > 0) parts.push_back(plural(queueItems, "item", "itens"));
@@ -508,94 +508,90 @@ void SyncActivity::renderSyncing(int y) {
   const std::string up = phase == Phase::Done ? (pushTotal > 0 ? "Enviado" : "Nada para enviar")
                          : parts.empty()      ? "Nada para enviar"
                                               : "Enviando " + joinPt(parts);
-  ui::vertArrow(renderer, ui::MARGIN, y + 2, arrow, true);
-  y = ui::paragraph(renderer, ui::fontBody(), textX, y, contentW - arrow - 10, up, 2) + 8;
-  ui::progressBar(renderer, ui::Box{ui::MARGIN, y, contentW, 16}, pushDone, pushTotal);
-  y += 16 + 22;
-
   std::string down = "Recebendo o banco";
   if (recvTotal > 1 || recvDone > 1) down += " (" + plural(std::max(recvTotal, recvDone), "item", "itens") + ")";
-  ui::vertArrow(renderer, ui::MARGIN, y + 2, arrow, false);
-  y = ui::paragraph(renderer, ui::fontBody(), textX, y, contentW - arrow - 10, down, 2) + 8;
-  ui::progressBar(renderer, ui::Box{ui::MARGIN, y, contentW, 16}, recvDone, recvTotal);
-  y += 16 + 12;
+
+  const auto progress = [&](const std::string& label, int done, int total) {
+    paragraph(ui, label, 1, false, fui::TextAlign::Left, 2);
+    const int barH = std::max(8, theme.rowHeight / 3);
+    const fui::Rect bar = ui.takeTop(static_cast<int16_t>(barH), theme.spaceLg);
+    fui::ProgressBarProps props;
+    props.value = done;
+    props.max = std::max(1, total);
+    props.border = fui::Paint::solid(fui::Color::Black);
+    props.borderWidth = 1;
+    fui::progressBar(ui.frame(),
+                     fui::Rect{static_cast<int16_t>(bar.x + side), bar.y, static_cast<int16_t>(bar.width - 2 * side), bar.height},
+                     props);
+  };
+  progress(up, pushDone, pushTotal);
+  progress(down, recvDone, recvTotal);
 
   if (phase != Phase::Done) return;
-  y = ui::section(renderer, y, "Resultado");
+  paragraph(ui, "Resultado", 1, true);
   size_t start = 0;
   while (start < resultText.size()) {
     size_t nl = resultText.find('\n', start);
     if (nl == std::string::npos) nl = resultText.size();
-    y = ui::paragraph(renderer, ui::fontBody(), ui::MARGIN, y, contentW, resultText.substr(start, nl - start), 3) + 2;
+    paragraph(ui, resultText.substr(start, nl - start), 1, false, fui::TextAlign::Left, 3);
     start = nl + 1;
   }
-  const ui::Box b = target(
-      ui::button(renderer, ui::Box{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, contentW, ui::BUTTON_H}, "Concluir", true),
-      ID_PRIMARY);
-  if (focused(ID_PRIMARY)) drawFocus(b);
 }
 
-void SyncActivity::renderNeedWifi(int y) {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  const int contentW = w - 2 * ui::MARGIN;
-  renderer.drawText(ui::fontTitle(), ui::MARGIN, y, "Conectar ao Wi-Fi", true, EpdFontFamily::BOLD);
-  y += renderer.getLineHeight(ui::fontTitle()) + 8;
-  y = ui::paragraph(renderer, ui::fontBody(), ui::MARGIN, y, contentW,
-                    "Para sincronizar, o Linguetta precisa de uma rede Wi-Fi. Escolha a rede e digite a senha "
-                    "uma vez: nas pr\xC3\xB3ximas, ele conecta sozinho.",
-                    5) +
-      12;
+void SyncActivity::buildNeedWifi(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  bottomButton(ui, "Agora n\xC3\xA3o", ID_SECONDARY);
+  const int side = sidePadding();
+  const fui::Rect r = ui.takeBottom(theme.rowHeight, theme.spaceMd);
+  button(ui, fui::Rect{static_cast<int16_t>(r.x + side), r.y, static_cast<int16_t>(r.width - 2 * side), r.height},
+         "Escolher rede", ID_PRIMARY, true);
+  if (focusedId() < 0) setFocus(ID_PRIMARY);
+  paragraph(ui, "Conectar ao Wi-Fi", 2, true);
+  ui.spacer(theme.spaceSm);
+  paragraph(ui,
+            "Para sincronizar, o Linguetta precisa de uma rede Wi-Fi. Escolha a rede e digite a senha "
+            "uma vez: nas pr\xC3\xB3ximas, ele conecta sozinho.",
+            1, false, fui::TextAlign::Left, 6);
   const int pending = queueSaves + queueReviews;  // a save already carries its new item
   if (pending > 0) {
-    const std::string n = std::to_string(pending) +
-                          (pending == 1 ? " altera\xC3\xA7\xC3\xA3o espera" : " altera\xC3\xA7\xC3\xB5" "es esperam") +
-                          " no cart\xC3\xA3o pelo pr\xC3\xB3ximo sync.";
-    ui::paragraph(renderer, ui::fontSmall(), ui::MARGIN, y, contentW, n, 2);
+    ui.spacer(theme.spaceMd);
+    paragraph(ui,
+              std::to_string(pending) + (pending == 1 ? " altera\xC3\xA7\xC3\xA3o espera" : " altera\xC3\xA7\xC3\xB5" "es esperam") +
+                  " no cart\xC3\xA3o pelo pr\xC3\xB3ximo sync.",
+              0, false, fui::TextAlign::Left, 2);
   }
-  const ui::Box second = target(
-      ui::button(renderer, ui::Box{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, contentW, ui::BUTTON_H}, "Agora n\xC3\xA3o",
-                 false),
-      ID_SECONDARY);
-  const ui::Box first = target(ui::button(renderer,
-                                          ui::Box{ui::MARGIN, second.y - 12 - ui::BUTTON_H, contentW, ui::BUTTON_H},
-                                          "Escolher rede", true),
-                               ID_PRIMARY);
-  if (focused(ID_PRIMARY)) drawFocus(first);
-  if (focused(ID_SECONDARY)) drawFocus(second);
 }
 
-void SyncActivity::renderOffline(int y) {
+void SyncActivity::buildOffline(ui::Ui& ui) {
   Service& svc = Service::get();
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  const int contentW = w - 2 * ui::MARGIN;
+  const auto& theme = ui.theme();
   const bool repair = error.kind == SyncErr::Unauthorized || error.kind == SyncErr::NotPaired;
+  bottomButton(ui, repair ? "Parear de novo" : "Tentar de novo", ID_PRIMARY, true);
+  if (focusedId() < 0) setFocus(ID_PRIMARY);
 
-  renderer.drawText(ui::fontTitle(), ui::MARGIN, y, noConnection ? "Sem conex\xC3\xA3o" : "N\xC3\xA3o sincronizou", true,
-                    EpdFontFamily::BOLD);
-  y += renderer.getLineHeight(ui::fontTitle()) + 8;
-  if (!noConnection) {
-    y = ui::paragraph(renderer, ui::fontBody(), ui::MARGIN, y, contentW, errorText(error), 3, true,
-                      EpdFontFamily::BOLD) + 6;
-  }
-  y = ui::paragraph(renderer, ui::fontBody(), ui::MARGIN, y, contentW,
-                    "Tudo continua funcionando. Isto fica guardado no cart\xC3\xA3o at\xC3\xA9 o pr\xC3\xB3ximo sync:", 3) +
-      4;
-  y = ui::section(renderer, y, "Na fila");
+  paragraph(ui, noConnection ? "Sem conex\xC3\xA3o" : "N\xC3\xA3o sincronizou", 2, true);
+  ui.spacer(theme.spaceSm);
+  if (!noConnection) paragraph(ui, errorText(error), 1, true, fui::TextAlign::Left, 3);
+  paragraph(ui, "Tudo continua funcionando. Isto fica guardado no cart\xC3\xA3o at\xC3\xA9 o pr\xC3\xB3ximo sync:", 1, false,
+            fui::TextAlign::Left, 3);
+  ui.spacer(theme.spaceSm);
 
-  const int lineH = renderer.getLineHeight(ui::fontBody()) + 16;
-  auto countRow = [&](const char* label, int n) {
-    renderer.drawText(ui::fontBody(), ui::MARGIN, y + 8, label, true);
-    const std::string v = std::to_string(n);
-    const int vw = renderer.getTextWidth(ui::fontBody(), v.c_str(), EpdFontFamily::BOLD);
-    renderer.drawText(ui::fontBody(), w - ui::MARGIN - vw, y + 8, v.c_str(), true, EpdFontFamily::BOLD);
-    y += lineH;
-    renderer.drawLine(ui::MARGIN, y - 1, w - ui::MARGIN, y - 1, true);
+  // "Na fila": a heading and one row per count.
+  std::vector<fui::ListItem> items;
+  std::vector<std::string> values;
+  values.reserve(4);
+  const auto row = [&](const char* label, int n) {
+    values.push_back(std::to_string(n));
+    fui::ListItem item;
+    item.label = label;
+    item.value = values.back().c_str();
+    items.push_back(item);
   };
-  countRow("Itens novos", queueItems);
-  countRow("Encontros", queueSaves);
-  countRow("Revis\xC3\xB5" "es", queueReviews);
-  if (queueSeen > 0) countRow("Vistos", queueSeen);
-  y += 10;
+  row("Itens novos", queueItems);
+  row("Encontros", queueSaves);
+  row("Revis\xC3\xB5" "es", queueReviews);
+  if (queueSeen > 0) row("Vistos", queueSeen);
+  items[0].sectionHeading = "Na fila";
 
   std::string last;
   int64_t lastMs = 0;
@@ -610,13 +606,23 @@ void SyncActivity::renderOffline(int y) {
   } else {
     last = "\xC3\x9Altimo sync: nunca";
   }
-  ui::paragraph(renderer, ui::fontSmall(), ui::MARGIN, y, contentW, last, 1);
+  const int lastH = renderer.getLineHeight(fontFor(0)) + theme.spaceMd;
+  const fui::Rect lastRow = ui.takeBottom(static_cast<int16_t>(lastH), theme.spaceSm);
+  ui.target().text(fui::Rect{static_cast<int16_t>(lastRow.x + sidePadding()), lastRow.y,
+                             static_cast<int16_t>(lastRow.width - 2 * sidePadding()), lastRow.height},
+                   last.c_str(), style(ui, 0));
 
-  const ui::Box b = target(
-      ui::button(renderer, ui::Box{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, contentW, ui::BUTTON_H},
-                 repair ? "Parear de novo" : "Tentar de novo", true),
-      ID_PRIMARY);
-  if (focused(ID_PRIMARY)) drawFocus(b);
+  // The counts are information, not choices: a list with no action.
+  fui::ListProps props;
+  props.items = items.data();
+  props.count = static_cast<uint16_t>(items.size());
+  props.selectedIndex = -1;
+  props.action = fui::NO_ACTION;
+  props.labelText = theme.bodyText;
+  props.valueText = theme.bodyText;
+  props.valueText.bold = true;
+  configureUiList(props, theme, ui.body(), UiListRowType::SingleLine);
+  ui.list(props);
 }
 
 }  // namespace linguetta

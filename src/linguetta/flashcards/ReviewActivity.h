@@ -30,22 +30,25 @@ class ReviewActivity final : public ui::Screen {
 
  private:
   void onEnter() override;
-  void render(RenderLock&&) override;
+  std::string title() const override;
+  std::string subtitle() const override;
+  void build(ui::Ui& ui) override;
   void onAction(int id) override;
   void onBack() override;
+  const char* confirmHint() const override;
 
   void loadCard();
   void answer(int rating);
   void endSession();
-  void renderFront();
-  void renderBack();
+  void buildFront(ui::Ui& ui);
+  void buildBack(ui::Ui& ui);
   // Word centred between top and bottom (bottom < 0: from top). Returns the y below it.
-  int drawWord(const std::string& word, int top, int bottom);
+  int drawWord(const std::string& word, int top, int bottom, int sidePad);
   // Ficha text (front or back) centred in the title font; returns the y below it.
-  int drawFicha(const std::string& text, int top, int bottom, int maxLines);
-  void renderSummary();
-  void renderEmpty();
-  void renderLeech();
+  int drawFicha(const std::string& text, int top, int bottom, int maxLines, int sidePad, int fontId);
+  void buildSummary(ui::Ui& ui);
+  void buildEmpty(ui::Ui& ui);
+  void buildLeech(ui::Ui& ui);
   void startQueue(int64_t now);
   void addExtraNew();
   bool canAddExtra() const;
@@ -58,7 +61,7 @@ class ReviewActivity final : public ui::Screen {
   };
 
   DeckRef ref;
-  std::string title;
+  std::string deckTitle;
   std::string shortTitle;  // card header: "Italiano" for a synced deck (the full name does not fit)
   TsvDeck tsv;
   std::unique_ptr<CardSource> source;
@@ -73,7 +76,6 @@ class ReviewActivity final : public ui::Screen {
   double intervals[4] = {0, 0, 0, 0};
   std::string status, emptyText;
   bool historySaved = false;
-  bool fullRefresh = true;
 };
 
 }  // namespace linguetta

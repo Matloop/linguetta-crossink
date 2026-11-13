@@ -15,9 +15,11 @@
 
 namespace linguetta {
 
+namespace fui = freeink::ui;
+
 namespace {
 
-enum : int { ID_BACK = 9000, ID_REVEAL = 1, ID_GRADE = 10, ID_DONE = 20, ID_EXTRA = 21, ID_CONTINUE = 22 };
+enum : int { ID_REVEAL = 1, ID_GRADE = 10, ID_DONE = 20, ID_EXTRA = 21, ID_CONTINUE = 22 };
 
 constexpr int EXTRA_NEW_STEP = 5;
 
@@ -44,13 +46,13 @@ std::string join(std::initializer_list<std::string> parts) {
 }  // namespace
 
 void ReviewActivity::onEnter() {
-  Activity::onEnter();
+  Screen::onEnter();
   Service& svc = Service::get();
   shortTitle = ref.linguetta ? languageName(ref.language) : ref.name;
-  title = ref.linguetta ? svc.deckName(ref.language) : ref.name;
+  deckTitle = ref.linguetta ? svc.deckName(ref.language) : ref.name;
   if (ref.linguetta && ref.deck >= 0) {
     const BankHeader& hdr = svc.view(ref.language).header();
-    if (ref.deck < static_cast<int>(hdr.decks.size())) title = shortTitle = hdr.decks[ref.deck].name;
+    if (ref.deck < static_cast<int>(hdr.decks.size())) deckTitle = shortTitle = hdr.decks[ref.deck].name;
   }
   const int64_t now = svc.nowMs();
   if (now <= 0) {
@@ -106,7 +108,7 @@ void ReviewActivity::startQueue(int64_t now) {
     }
     queue = tsv.queue(now, svc.dayStart("", now), perDay > 0 ? perDay : 10);
   }
-  session.start(*source, title, std::move(queue), now);
+  session.start(*source, deckTitle, std::move(queue), now);
   historySaved = false;
   if (!session.done()) {
     loadCard();
@@ -142,7 +144,7 @@ void ReviewActivity::addExtraNew() {
     emptyText = "Nada para revisar hoje neste deck.";
     setFocus(ID_DONE);
   }
-  fullRefresh = true;
+  requestFullRefresh();
   requestUpdate();
 }
 
@@ -209,7 +211,7 @@ void ReviewActivity::answer(int rating) {
     leeches.push_back({face.lemma, source->state(session.lastLeech()).lapses});
     mode = Mode::Leech;
     setFocus(ID_CONTINUE);
-    fullRefresh = true;
+    requestFullRefresh();
     requestUpdate();
     return;
   }
@@ -221,7 +223,7 @@ void ReviewActivity::answer(int rating) {
   mode = Mode::Front;
   session.shown(now);
   // A cleaner refresh every 10 answers keeps e-ink ghosting down.
-  fullRefresh = session.answers() % 10 == 0;
+  if (session.answers() % 10 == 0) requestFullRefresh();
   requestUpdate();
 }
 
@@ -232,7 +234,7 @@ void ReviewActivity::endSession() {
   }
   mode = Mode::Summary;
   setFocus(canAddExtra() ? ID_EXTRA : ID_DONE);
-  fullRefresh = true;
+  requestFullRefresh();
   requestUpdate();
 }
 
@@ -245,9 +247,7 @@ void ReviewActivity::onBack() {
 }
 
 void ReviewActivity::onAction(int id) {
-  if (id == ID_BACK) {
-    onBack();
-  } else if (mode == Mode::Front && id == ID_REVEAL) {
+  if (mode == Mode::Front && id == ID_REVEAL) {
     mode = Mode::Back;
     // No grade starts focused: a filled "Bom" read as the app's suggestion. The side buttons
     // pick one first (Confirm does nothing until then); touch just taps.
@@ -263,7 +263,7 @@ void ReviewActivity::onAction(int id) {
     loadCard();
     mode = Mode::Front;
     session.shown(Service::get().nowMs());
-    fullRefresh = true;
+    requestFullRefresh();
     requestUpdate();
   } else if ((mode == Mode::Summary || mode == Mode::Empty) && id == ID_EXTRA) {
     addExtraNew();
@@ -272,60 +272,69 @@ void ReviewActivity::onAction(int id) {
   }
 }
 
-void ReviewActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-  clearTargets();
+std::string ReviewActivity::title() const {
+  switch (mode) {
+    case Mode::Summary:
+      return "Sess\xC3\xA3o conclu\xC3\xAD" "da";
+    case Mode::Empty:
+      return deckTitle;
+    default:
+      return shortTitle;
+  }
+}
+
+std::string ReviewActivity::subtitle() const {
+  return mode == Mode::Front || mode == Mode::Back || mode == Mode::Leech ? remainingLabel(session.remaining()) : "";
+}
+
+const char* ReviewActivity::confirmHint() const { return mode == Mode::Front ? "Mostrar" : "Escolher"; }
+
+void ReviewActivity::build(ui::Ui& ui) {
   switch (mode) {
     case Mode::Front:
-      renderFront();
+      buildFront(ui);
       break;
     case Mode::Back:
-      renderBack();
+      buildBack(ui);
       break;
     case Mode::Leech:
-      renderLeech();
+      buildLeech(ui);
       break;
     case Mode::Summary:
-      renderSummary();
+      buildSummary(ui);
       break;
     case Mode::Empty:
-      renderEmpty();
+      buildEmpty(ui);
       break;
   }
-  renderer.displayBuffer(fullRefresh ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-  fullRefresh = false;
 }
 
-void ReviewActivity::renderFront() {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  const std::string pos = remainingLabel(session.remaining());
-  target(ui::header(renderer, shortTitle, pos), ID_BACK, false);
-
-  const ui::Box button{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, w - 2 * ui::MARGIN, ui::BUTTON_H};
+void ReviewActivity::buildFront(ui::Ui& ui) {
+  const fui::Rect button = bottomButton(ui, "Mostrar resposta", ID_REVEAL, true);
+  (void)button;
+  const fui::Rect body = ui.body();
+  const int side = sidePadding();
+  if (focusedId() < 0) setFocus(ID_REVEAL);
   // Only the word, big and centred: the sentence is context for the answer, not a hint.
-  const int bodyTop = ui::headerH(), bodyBottom = button.y - 10;
+  int top = body.y;
   if (face.ficha) {
-    int top = bodyTop;
     if (face.cloze) {
-      const char* hint = "LACUNA";
-      const int tw = renderer.getTextWidth(ui::fontSmall(), hint, EpdFontFamily::BOLD);
-      renderer.drawText(ui::fontSmall(), (w - tw) / 2, bodyTop + 24, hint, true, EpdFontFamily::BOLD);
-      top += 24 + renderer.getLineHeight(ui::fontSmall());
+      const fui::Rect hint = ui.takeTop(renderer.getLineHeight(fontFor(0)), ui.theme().spaceMd);
+      ui.target().text(hint, "LACUNA", style(ui, 0, true, fui::TextAlign::Center));
+      top = ui.body().y;
     }
-    drawFicha(face.lemma, top, bodyBottom, 10);
+    drawFicha(face.lemma, top, body.y + body.height, 10, side, fontFor(2));
   } else {
-    drawWord(face.lemma, bodyTop, bodyBottom);
+    drawWord(face.lemma, top, body.y + body.height, side);
   }
-  // The whole body reveals too (touch); the button is the focus target.
-  target(ui::Box{0, bodyTop, w, bodyBottom - bodyTop}, ID_REVEAL, false);
-  target(ui::button(renderer, button, "Mostrar resposta", true), ID_REVEAL);
-  setFocus(ID_REVEAL);
+  // The whole body reveals too (touch).
+  tapArea(ui, body, ID_REVEAL);
 }
 
-int ReviewActivity::drawFicha(const std::string& text, int top, int bottom, int maxLines) {
-  const int w = ui::screenW(renderer);
-  const int innerW = w - 2 * ui::MARGIN - 20;
-  const int font = ui::fontTitle();
+int ReviewActivity::drawFicha(const std::string& text, int top, int bottom, int maxLines, const int sidePad,
+                              const int font) {
+  const int w = renderer.getScreenWidth();
+  const int innerW = w - 2 * sidePad;
   const int lh = renderer.getLineHeight(font);
   if (bottom >= 0) maxLines = std::max(1, std::min(maxLines, (bottom - top) / lh));
   const auto lines = renderer.wrappedText(font, text.c_str(), innerW, maxLines, EpdFontFamily::REGULAR);
@@ -338,15 +347,15 @@ int ReviewActivity::drawFicha(const std::string& text, int top, int bottom, int 
   return y;
 }
 
-int ReviewActivity::drawWord(const std::string& word, int top, int bottom) {
-  const int w = ui::screenW(renderer);
-  const int innerW = w - 2 * ui::MARGIN - 20;
+int ReviewActivity::drawWord(const std::string& word, int top, int bottom, const int sidePad) {
+  const int w = renderer.getScreenWidth();
+  const int innerW = w - 2 * sidePad;
   // Display font unless a single token is too wide for it.
   int font = ui::fontDisplay();
   auto lines = renderer.wrappedText(font, word.c_str(), innerW, 3, EpdFontFamily::BOLD);
   for (const auto& l : lines) {
     if (renderer.getTextWidth(font, l.c_str(), EpdFontFamily::BOLD) > innerW) {
-      font = ui::fontTitle();
+      font = fontFor(2);
       lines = renderer.wrappedText(font, word.c_str(), innerW, 3, EpdFontFamily::BOLD);
       break;
     }
@@ -361,11 +370,11 @@ int ReviewActivity::drawWord(const std::string& word, int top, int bottom) {
   return y;
 }
 
-void ReviewActivity::renderBack() {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  const std::string pos = remainingLabel(session.remaining());
-  target(ui::header(renderer, shortTitle, pos), ID_BACK, false);
-  const int innerW = w - 2 * ui::MARGIN - 20;
+void ReviewActivity::buildBack(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  const int w = renderer.getScreenWidth();
+  const int side = sidePadding();
+  const int innerW = w - 2 * side;
   const auto centred = [&](int font, int y, const std::string& text, EpdFontFamily::Style style, int maxLines) {
     for (const auto& line : renderer.wrappedText(font, text.c_str(), innerW, maxLines, style)) {
       const int tw = renderer.getTextWidth(font, line.c_str(), style);
@@ -375,90 +384,100 @@ void ReviewActivity::renderBack() {
     return y;
   };
 
-  // Grades at the bottom.
-  const int gradesH = ui::BUTTON_H + 8;
-  const int gradesY = h - ui::MARGIN - gradesH;
-  const int statusH = status.empty() ? 0 : renderer.getLineHeight(ui::fontSmall()) + 8;
+  // Grades at the bottom, two by two: "Errei · 1 min".
+  std::string labels[4];
+  for (int g = 1; g <= 4; g++) labels[g - 1] = std::string(GRADE_NAMES[g]) + " \xC2\xB7 " + fsrs::formatInterval(intervals[g - 1]);
+  const int gap = theme.spaceMd;
+  for (int row = 1; row >= 0; row--) {
+    const fui::Rect r = ui.takeBottom(theme.rowHeight, gap);
+    const int bw = (r.width - 2 * side - gap) / 2;
+    for (int col = 0; col < 2; col++) {
+      const int g = row * 2 + col + 1;
+      button(ui, fui::Rect{static_cast<int16_t>(r.x + side + col * (bw + gap)), r.y, static_cast<int16_t>(bw), r.height},
+             labels[g - 1].c_str(), ID_GRADE + g);
+    }
+  }
+  if (!status.empty()) {
+    const fui::Rect st = ui.takeBottom(renderer.getLineHeight(fontFor(0)), gap);
+    ui.target().text(st, status.c_str(), style(ui, 0, true, fui::TextAlign::Center));
+  }
 
+  const fui::Rect body = ui.body();
+  const int bottom = body.y + body.height;
+  const int fontTitle = fontFor(2), fontBody = fontFor(1), fontSmall = fontFor(0);
   int y;
   if (face.ficha) {
     // Front small, a rule, then the back as the answer.
-    y = centred(ui::fontBody(), ui::headerH() + 30, face.lemma, EpdFontFamily::REGULAR, 4);
-    y += 18;
-    renderer.fillRect(w / 2 - 40, y, 80, 2, true);
-    y += 22;
-    drawFicha(face.sense, y, gradesY - statusH - 16, 12);
-  } else {
+    y = centred(fontBody, body.y + gap, face.lemma, EpdFontFamily::REGULAR, 4);
+    y += gap;
+    ui.target().fill(fui::Rect{static_cast<int16_t>(w / 2 - 40), static_cast<int16_t>(y), 80, 2},
+                     fui::Paint::solid(fui::Color::Black));
+    y += gap * 2;
+    drawFicha(face.sense, y, bottom - gap, 12, side, fontTitle);
+    return;
+  }
   // Word, then the answer: the meaning is the biggest thing after the word.
-  y = drawWord(face.lemma, ui::headerH() + 40, -1);
+  y = drawWord(face.lemma, body.y + gap * 2, -1, side);
   const std::string meta = join({face.ipa, face.pos});
   if (!meta.empty()) y = centred(ui::fontIpa(), y + 4, meta, EpdFontFamily::REGULAR, 1);
-  y += 22;
-  renderer.fillRect(w / 2 - 40, y, 80, 2, true);
-  y += 24;
-  if (!face.sense.empty()) y = centred(ui::fontTitle(), y, face.sense, EpdFontFamily::REGULAR, 3);
+  y += gap * 2;
+  ui.target().fill(fui::Rect{static_cast<int16_t>(w / 2 - 40), static_cast<int16_t>(y), 80, 2},
+                   fui::Paint::solid(fui::Color::Black));
+  y += gap * 2;
+  if (!face.sense.empty()) y = centred(fontTitle, y, face.sense, EpdFontFamily::REGULAR, 3);
 
   // Context, small and below: the sentence it was met in (3 lines at most) and the work.
+  const int lh = renderer.getLineHeight(fontSmall);
   if (!face.sentence.empty()) {
     const size_t at = findCaseless(face.sentence, face.form.empty() ? face.lemma : face.form);
     const size_t len = face.form.empty() ? face.lemma.size() : face.form.size();
-    const int lh = renderer.getLineHeight(ui::fontSmall());
-    const int room = std::max(1, (gradesY - statusH - y - 40 - 2 * lh) / lh);
-    y = ui::highlightedSentence(renderer, ui::fontSmall(), y + 32, innerW, face.sentence, at,
+    const int room = std::max(1, (bottom - y - gap * 3 - 2 * lh) / lh);
+    y = ui::highlightedSentence(renderer, fontSmall, y + gap * 2, innerW, face.sentence, at,
                                 at == std::string::npos ? at : at + len, std::min(room, 3));
   }
-  if (!face.work.empty()) centred(ui::fontSmall(), y + 6, face.work, EpdFontFamily::REGULAR, 1);
-  }
-
-  if (!status.empty()) {
-    const int tw = renderer.getTextWidth(ui::fontSmall(), status.c_str(), EpdFontFamily::BOLD);
-    renderer.drawText(ui::fontSmall(), (w - tw) / 2, gradesY - statusH, status.c_str(), true, EpdFontFamily::BOLD);
-  }
-  const int gap = 8;
-  const int gw = (w - 2 * ui::MARGIN - 3 * gap) / 4;
-  const int lh = renderer.getLineHeight(ui::fontBody()), sh = renderer.getLineHeight(ui::fontSmall());
-  for (int g = 1; g <= 4; g++) {
-    const ui::Box b{ui::MARGIN + (g - 1) * (gw + gap), gradesY, gw, gradesH};
-    // All four look the same; the focus (side buttons only) is an outer ring.
-    renderer.drawRoundedRect(b.x, b.y, b.w, b.h, 2, 10, true);
-    if (focused(ID_GRADE + g)) drawFocus(b);
-    const int top = b.y + (b.h - lh - sh) / 2;
-    const std::string name = renderer.truncatedText(ui::fontBody(), GRADE_NAMES[g], b.w - 8, EpdFontFamily::BOLD);
-    int tw = renderer.getTextWidth(ui::fontBody(), name.c_str(), EpdFontFamily::BOLD);
-    renderer.drawText(ui::fontBody(), b.x + (b.w - tw) / 2, top, name.c_str(), true, EpdFontFamily::BOLD);
-    const std::string iv = fsrs::formatInterval(intervals[g - 1]);
-    // "2 meses" is wider than a grade box at 12 pt; drop to the 10 pt UI font then.
-    int ivFont = ui::fontSmall();
-    tw = renderer.getTextWidth(ivFont, iv.c_str());
-    if (tw > b.w - 16) {
-      ivFont = UI_10_FONT_ID;
-      tw = renderer.getTextWidth(ivFont, iv.c_str());
-    }
-    renderer.drawText(ivFont, b.x + (b.w - tw) / 2, top + lh, iv.c_str(), true);
-    target(b, ID_GRADE + g);
-  }
+  if (!face.work.empty() && y + lh <= bottom) centred(fontSmall, y + 6, face.work, EpdFontFamily::REGULAR, 1);
 }
 
-void ReviewActivity::renderSummary() {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  target(ui::header(renderer, "Sess\xC3\xA3o conclu\xC3\xAD" "da"), ID_BACK, false);
-  int y = ui::headerH() + 20;
-  const std::string t = renderer.truncatedText(ui::fontTitle(), title.c_str(), w - 2 * ui::MARGIN, EpdFontFamily::BOLD);
-  renderer.drawText(ui::fontTitle(), ui::MARGIN, y, t.c_str(), true, EpdFontFamily::BOLD);
-  y += renderer.getLineHeight(ui::fontTitle()) + 2;
+void ReviewActivity::buildSummary(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  const int side = sidePadding();
+  const int gap = theme.spaceMd;
+  const bool extra = canAddExtra();
+
+  // Buttons first (bottom), then the body fills from the top.
+  bottomButton(ui, "Voltar aos decks", ID_DONE, true);
+  if (extra) {
+    const fui::Rect r = ui.takeBottom(theme.rowHeight, gap);
+    button(ui, fui::Rect{static_cast<int16_t>(r.x + side), r.y, static_cast<int16_t>(r.width - 2 * side), r.height},
+           ("+" + std::to_string(EXTRA_NEW_STEP) + " novas hoje").c_str(), ID_EXTRA);
+    const fui::Rect note = ui.takeBottom(renderer.getLineHeight(fontFor(0)), gap);
+    ui.target().text(fui::Rect{static_cast<int16_t>(note.x + side), note.y, static_cast<int16_t>(note.width - 2 * side), note.height},
+                     "As novas de hoje acabaram.", style(ui, 0, true));
+  }
+
+  paragraph(ui, deckTitle, 2, true);
   const int cards = session.cards();
-  const std::string sub = std::to_string(cards) + (cards == 1 ? " cart\xC3\xA3o" : " cart\xC3\xB5" "es") + " \xC2\xB7 " +
-                          formatDuration(session.durationMs());
-  renderer.drawText(ui::fontBody(), ui::MARGIN, y, sub.c_str(), true);
-  y += renderer.getLineHeight(ui::fontBody()) + 16;
+  paragraph(ui, std::to_string(cards) + (cards == 1 ? " cart\xC3\xA3o" : " cart\xC3\xB5" "es") + " \xC2\xB7 " +
+                    formatDuration(session.durationMs()),
+            1);
+  ui.spacer(gap);
 
   const int errors = session.firstGrades(1);
-  const int boxW = (w - 2 * ui::MARGIN - 12) / 2;
-  ui::statBox(renderer, ui::Box{ui::MARGIN, y, boxW, 84}, std::to_string(cards - errors), "acertos");
-  ui::statBox(renderer, ui::Box{ui::MARGIN + boxW + 12, y, boxW, 84}, std::to_string(errors), "erros");
-  y += 84 + 4;
+  const fui::Rect boxes = ui.takeTop(static_cast<int16_t>(theme.rowHeight * 3 / 2), gap);
+  const int bw = (boxes.width - 2 * side - gap) / 2;
+  const std::string hits = std::to_string(cards - errors), misses = std::to_string(errors);
+  fui::MetricCardProps card;
+  card.valueText = style(ui, 2, true, fui::TextAlign::Center);
+  card.captionText = style(ui, 0, false, fui::TextAlign::Center);
+  card.value = hits.c_str();
+  card.caption = "acertos";
+  fui::metricCard(ui.frame(), fui::Rect{static_cast<int16_t>(boxes.x + side), boxes.y, static_cast<int16_t>(bw), boxes.height}, card);
+  card.value = misses.c_str();
+  card.caption = "erros";
+  fui::metricCard(ui.frame(),
+                  fui::Rect{static_cast<int16_t>(boxes.x + side + bw + gap), boxes.y, static_cast<int16_t>(bw), boxes.height},
+                  card);
 
-  const bool extra = canAddExtra();
   // Teimosas or "+5" need the room: the grades shrink to one line.
   const bool compact = extra || !leeches.empty();
   if (compact) {
@@ -466,27 +485,29 @@ void ReviewActivity::renderSummary() {
     for (int g = 1; g <= 4; g++) {
       grades += (g > 1 ? " \xC2\xB7 " : "") + std::string(GRADE_NAMES[g]) + " " + std::to_string(session.firstGrades(g));
     }
-    y += 10;
-    renderer.drawText(ui::fontSmall(), ui::MARGIN, y, grades.c_str(), true);
-    y += renderer.getLineHeight(ui::fontSmall()) + 4;
+    paragraph(ui, grades, 0);
   } else {
-    y = ui::section(renderer, y, "Por nota");
-    const int labelW = renderer.getTextWidth(ui::fontBody(), "Dif\xC3\xAD" "cil") + 14;
-    const int countW = renderer.getTextWidth(ui::fontBody(), "0000");
-    const int barX = ui::MARGIN + labelW, barW = w - 2 * ui::MARGIN - labelW - countW - 14;
-    const int lh = renderer.getLineHeight(ui::fontBody());
     for (int g = 1; g <= 4; g++) {
+      const fui::Rect row = ui.takeTop(theme.rowHeight);
       const int n = session.firstGrades(g);
-      renderer.drawText(ui::fontBody(), ui::MARGIN, y, GRADE_NAMES[g], true);
-      const int barY = y + (lh - 16) / 2;
-      renderer.drawRect(barX, barY, barW, 16, 2, true);
-      if (cards > 0 && n > 0) renderer.fillRect(barX, barY, std::max(4, barW * n / cards), 16, true);
-      const std::string c = std::to_string(n);
-      renderer.drawText(ui::fontBody(), w - ui::MARGIN - renderer.getTextWidth(ui::fontBody(), c.c_str()), y, c.c_str(),
-                        true);
-      y += lh + 12;
+      const int labelW = renderer.getTextWidth(fontFor(1), "Dif\xC3\xAD" "cil") + gap;
+      const int countW = renderer.getTextWidth(fontFor(1), "0000");
+      ui.target().text(fui::Rect{static_cast<int16_t>(row.x + side), row.y, static_cast<int16_t>(labelW), row.height},
+                       GRADE_NAMES[g], style(ui, 1));
+      const int barX = row.x + side + labelW, barW = row.width - 2 * side - labelW - countW - gap;
+      const int barH = std::max(8, row.height / 3);
+      fui::ProgressBarProps bar;
+      bar.value = n;
+      bar.max = std::max(1, cards);
+      bar.border = fui::Paint::solid(fui::Color::Black);
+      bar.borderWidth = 1;
+      bar.minFill = n > 0 ? 4 : 0;
+      fui::progressBar(ui.frame(), fui::Rect{static_cast<int16_t>(barX), static_cast<int16_t>(row.y + (row.height - barH) / 2),
+                                             static_cast<int16_t>(barW), static_cast<int16_t>(barH)},
+                       bar);
+      ui.target().text(fui::Rect{static_cast<int16_t>(row.right() - side - countW), row.y, static_cast<int16_t>(countW), row.height},
+                       std::to_string(n).c_str(), style(ui, 1, false, fui::TextAlign::Right));
     }
-    y += 8;
   }
   std::string note;
   if (ref.linguetta) {
@@ -496,82 +517,55 @@ void ReviewActivity::renderSummary() {
   } else {
     note = "Deck local: o progresso fica s\xC3\xB3 neste aparelho.";
   }
-  y = ui::paragraph(renderer, ui::fontSmall(), ui::MARGIN, y, w - 2 * ui::MARGIN, note, compact ? 2 : 3);
+  paragraph(ui, note, 0, false, fui::TextAlign::Left, compact ? 2 : 3);
 
-  const int lineH = renderer.getLineHeight(ui::fontSmall());
-  const int buttonsTop = h - ui::MARGIN - ui::BUTTON_H - (extra ? ui::BUTTON_H + 12 + lineH + 8 : 0);
   if (!leeches.empty()) {
     // One line per teimosa ("ostinato · errou 8 vezes"), then what happens to them.
-    y = ui::section(renderer, y, leeches.size() == 1 ? "Teimosa" : "Teimosas");
-    const int bodyH = renderer.getLineHeight(ui::fontBody());
+    ui.spacer(gap);
+    paragraph(ui, leeches.size() == 1 ? "Teimosa" : "Teimosas", 1, true);
+    const int lh = renderer.getLineHeight(fontFor(1));
     for (size_t k = 0; k < leeches.size(); k++) {
-      const Leech& l = leeches[k];
-      if (y + bodyH * 2 + lineH * 2 > buttonsTop - 4 && k + 1 < leeches.size()) {
-        const std::string more = "e mais " + std::to_string(leeches.size() - k);
-        renderer.drawText(ui::fontBody(), ui::MARGIN, y, more.c_str(), true);
-        y += bodyH;
+      if (ui.body().height < lh * 3 && k + 1 < leeches.size()) {
+        paragraph(ui, "e mais " + std::to_string(leeches.size() - k), 1);
         break;
       }
-      const std::string line = l.word + " \xC2\xB7 errou " + std::to_string(l.lapses) + (l.lapses == 1 ? " vez" : " vezes");
-      const std::string t = renderer.truncatedText(ui::fontBody(), line.c_str(), w - 2 * ui::MARGIN, EpdFontFamily::BOLD);
-      renderer.drawText(ui::fontBody(), ui::MARGIN, y, t.c_str(), true, EpdFontFamily::BOLD);
-      y += bodyH;
+      const Leech& l = leeches[k];
+      paragraph(ui, l.word + " \xC2\xB7 errou " + std::to_string(l.lapses) + (l.lapses == 1 ? " vez" : " vezes"), 1);
     }
-    ui::paragraph(renderer, ui::fontSmall(), ui::MARGIN, y + 2, w - 2 * ui::MARGIN,
-                  leeches.size() == 1 ? "Vai esperar at\xC3\xA9 voc\xC3\xAA encontr\xC3\xA1-la num livro ou s\xC3\xA9rie."
-                                      : "V\xC3\xA3o esperar at\xC3\xA9 voc\xC3\xAA encontr\xC3\xA1-las num livro ou s\xC3\xA9rie.",
-                  2);
+    paragraph(ui,
+              leeches.size() == 1 ? "Vai esperar at\xC3\xA9 voc\xC3\xAA encontr\xC3\xA1-la num livro ou s\xC3\xA9rie."
+                                  : "V\xC3\xA3o esperar at\xC3\xA9 voc\xC3\xAA encontr\xC3\xA1-las num livro ou s\xC3\xA9rie.",
+              0, false, fui::TextAlign::Left, 2);
   }
-  if (extra) {
-    const char* done = "As novas de hoje acabaram.";
-    renderer.drawText(ui::fontSmall(), ui::MARGIN, buttonsTop, done, true, EpdFontFamily::BOLD);
-  }
-
-  ui::Box b{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, w - 2 * ui::MARGIN, ui::BUTTON_H};
-  if (extra) {
-    const ui::Box e{b.x, b.y - ui::BUTTON_H - 12, b.w, ui::BUTTON_H};
-    target(ui::button(renderer, e, "+" + std::to_string(EXTRA_NEW_STEP) + " novas hoje", false), ID_EXTRA);
-    if (focused(ID_EXTRA)) drawFocus(e);
-  }
-  target(ui::button(renderer, b, "Voltar aos decks", true), ID_DONE);
 }
 
-void ReviewActivity::renderLeech() {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  target(ui::header(renderer, shortTitle, remainingLabel(session.remaining())), ID_BACK, false);
-  const ui::Box button{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, w - 2 * ui::MARGIN, ui::BUTTON_H};
+void ReviewActivity::buildLeech(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  bottomButton(ui, "Continuar", ID_CONTINUE, true);
+  if (focusedId() < 0) setFocus(ID_CONTINUE);
   const Leech& l = leeches.back();
-  int y = drawWord(l.word, ui::headerH() + 80, -1) + 36;
-  // The notice in a bordered box.
-  const int boxX = ui::MARGIN, boxW = w - 2 * ui::MARGIN;
-  const int pad = 18;
-  const int lh = renderer.getLineHeight(ui::fontBody());
-  const auto lines = renderer.wrappedText(ui::fontBody(), leechText(l.lapses).c_str(), boxW - 2 * pad, 5);
-  const int boxH = static_cast<int>(lines.size()) * lh + 2 * pad;
-  renderer.drawRoundedRect(boxX, y, boxW, boxH, 3, 10, true);
-  int ty = y + pad;
-  for (const auto& line : lines) {
-    renderer.drawText(ui::fontBody(), boxX + pad, ty, line.c_str(), true);
-    ty += lh;
-  }
-  y += boxH + 18;
-  ui::paragraph(renderer, ui::fontSmall(), ui::MARGIN, y, w - 2 * ui::MARGIN,
-                "Ela sai da fila de hoje. Quando voc\xC3\xAA a salvar de novo numa frase, volta para a revis\xC3\xA3o.", 3);
-  target(ui::button(renderer, button, "Continuar", true), ID_CONTINUE);
+  const fui::Rect body = ui.body();
+  int y = drawWord(l.word, body.y + theme.spaceLg, -1, sidePadding()) + theme.spaceLg * 2;
+  ui.takeTop(static_cast<int16_t>(y - body.y));
+  paragraph(ui, leechText(l.lapses), 1, false, fui::TextAlign::Center, 5);
+  ui.spacer(theme.spaceMd);
+  paragraph(ui, "Ela sai da fila de hoje. Quando voc\xC3\xAA a salvar de novo numa frase, volta para a revis\xC3\xA3o.", 0,
+            false, fui::TextAlign::Center, 3);
 }
 
-void ReviewActivity::renderEmpty() {
-  const int w = ui::screenW(renderer), h = ui::screenH(renderer);
-  target(ui::header(renderer, title), ID_BACK, false);
-  ui::message(renderer, h / 2 - 60, emptyText);
-  const ui::Box b{ui::MARGIN, h - ui::MARGIN - ui::BUTTON_H, w - 2 * ui::MARGIN, ui::BUTTON_H};
-  if (canAddExtra()) {
-    const ui::Box e{b.x, b.y - ui::BUTTON_H - 12, b.w, ui::BUTTON_H};
-    target(ui::button(renderer, e, "+" + std::to_string(EXTRA_NEW_STEP) + " novas hoje", false), ID_EXTRA);
-    if (focused(ID_EXTRA)) drawFocus(e);
+void ReviewActivity::buildEmpty(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  const int side = sidePadding();
+  bottomButton(ui, "Voltar aos decks", ID_DONE, true);
+  const bool extra = canAddExtra();
+  if (extra) {
+    const fui::Rect r = ui.takeBottom(theme.rowHeight, theme.spaceMd);
+    button(ui, fui::Rect{static_cast<int16_t>(r.x + side), r.y, static_cast<int16_t>(r.width - 2 * side), r.height},
+           ("+" + std::to_string(EXTRA_NEW_STEP) + " novas hoje").c_str(), ID_EXTRA);
   }
-  target(ui::button(renderer, b, "Voltar aos decks", true), ID_DONE);
-  if (!focused(ID_EXTRA)) setFocus(ID_DONE);
+  if (focusedId() < 0) setFocus(extra ? ID_EXTRA : ID_DONE);
+  ui.spacer(static_cast<int16_t>(ui.body().height / 3));
+  paragraph(ui, emptyText, 1, false, fui::TextAlign::Center, 4);
 }
 
 }  // namespace linguetta

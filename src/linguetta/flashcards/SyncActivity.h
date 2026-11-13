@@ -23,14 +23,15 @@ class SyncActivity final : public ui::Screen {
 
   void onEnter() override;
   void onExit() override;
-  void render(RenderLock&&) override;
+  std::string title() const override;
+  void build(ui::Ui& ui) override;
   void onAction(int id) override;
+  const char* confirmHint() const override { return "Escolher"; }
   void onTick() override;
   bool preventAutoSleep() override { return phase == Phase::Pairing || phase == Phase::Syncing; }
 
   void connect();
   void openWifi();
-  void renderNeedWifi(int y);
   void afterWifi(bool connected);
   void startPairing();
   void poll();
@@ -40,12 +41,12 @@ class SyncActivity final : public ui::Screen {
   void loadQueue();
   int64_t clockMs() const;
 
-  void renderPairing(int y);
-  void renderSyncing(int y);
-  void renderOffline(int y);
+  void buildNeedWifi(ui::Ui& ui);
+  void buildPairing(ui::Ui& ui);
+  void buildSyncing(ui::Ui& ui);
+  void buildOffline(ui::Ui& ui);
 
   Phase phase = Phase::Wifi;
-  bool firstRender = true;
   bool startPending = false;
   std::unique_ptr<SyncHttp> http;  // one TLS session for the whole visit
 

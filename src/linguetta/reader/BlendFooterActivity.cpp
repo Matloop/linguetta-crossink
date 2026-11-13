@@ -15,7 +15,11 @@
 
 namespace linguetta {
 
+namespace fui = freeink::ui;
+
 namespace {
+
+enum : int { ID_CLOSE = 0, ID_SAVE = 1, ID_LANG = 2 };
 
 std::string reviewLine(const ViewEntry& e, int64_t now) {
   if (e.known) return "Marcada como conhecida";
@@ -37,7 +41,8 @@ std::string fileStem(const std::string& path) {
 }  // namespace
 
 void BlendFooterActivity::onEnter() {
-  Activity::onEnter();
+  Screen::onEnter();
+  useFastRefresh();  // an overlay on the reader page: no full flash
   Service& svc = Service::get();
   koHash = svc.koHash(tap.bookPath);
   if (tap.lens) {
@@ -140,33 +145,21 @@ void BlendFooterActivity::close() {
   finish();
 }
 
-void BlendFooterActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    close();
-    return;
-  }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (canSave()) {
-      save();
-    } else {
-      close();
-    }
-    return;
-  }
-  int x = 0, y = 0;
-  if (mappedInput.wasScreenTapped(x, y)) {
-    if (canSave() && saveBox.contains(x, y)) {
-      save();
-    } else if (mode == Mode::New && langBox.contains(x, y)) {
+void BlendFooterActivity::onAction(int id) {
+  switch (id) {
+    case ID_SAVE:
+      if (canSave()) save();
+      break;
+    case ID_LANG:
       cycleLanguage();
-    } else if (closeBox.contains(x, y) || !strip.contains(x, y)) {
+      break;
+    default:
       close();
-    }
+      break;
   }
 }
 
-void BlendFooterActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+void BlendFooterActivity::backdrop() {
   if (page) {
     page->render(renderer, SETTINGS.getReaderFontId(), marginLeft, marginTop);
     wordlens::draw(renderer, *page, SETTINGS.getReaderFontId(), marginLeft, marginTop, false);
@@ -177,99 +170,106 @@ void BlendFooterActivity::render(RenderLock&&) {
     ui::shade(renderer, b.x - 2, b.y + 3, b.w + 4, b.h - 3);
     renderer.drawRect(b.x - 3, b.y + 2, b.w + 6, b.h - 1, 2, true);
   }
+}
 
-  const int w = ui::screenW(renderer);
-  const int h = ui::screenH(renderer);
-  const int padX = 24;
-  const int innerW = w - 2 * padX;
+void BlendFooterActivity::build(ui::Ui& ui) {
+  const auto& theme = ui.theme();
+  const int w = renderer.getScreenWidth();
+  const int h = renderer.getScreenHeight();
+  const int side = sidePadding();
+  const int innerW = w - 2 * side;
   const bool inBank = mode != Mode::New;
   const std::string lemma = inBank && !bankLemma.empty() ? bankLemma : tap.link.lemma;
   const std::string gloss = inBank && !bankSense.empty() ? bankSense : tap.link.translation;
   const std::string pos = inBank && !bankPos.empty() ? bankPos : tap.link.note;
-
-  const int lemmaH = renderer.getLineHeight(ui::fontTitle());
-  const auto glossLines = renderer.wrappedText(ui::fontLarge(), gloss.c_str(), innerW, 2);
-  int height = 18 + lemmaH + 4 + static_cast<int>(glossLines.size()) * renderer.getLineHeight(ui::fontLarge()) + 14;
   const bool showReview = mode == Mode::InBank && !nextReview.empty();
-  if (showReview) height += renderer.getLineHeight(ui::fontSmall()) + 10;
-  if (!status.empty()) height += renderer.getLineHeight(ui::fontSmall()) + 8;
-  const int smallH = renderer.getLineHeight(ui::fontSmall());
-  const int langRowH = smallH + 18;  // tall enough to tap
-  height += langRowH + ui::BUTTON_H + 22;
+  const bool canSwitch = languages.size() > 1 && mode == Mode::New;
 
-  // Bottom strip, unless the word sits under it: then the strip goes to the top.
+  const int gap = theme.spaceMd;
+  const int titleH = renderer.getLineHeight(fontFor(2));
+  const int bodyH = renderer.getLineHeight(fontFor(1));
+  const int smallH = renderer.getLineHeight(fontFor(0));
+  const int glossLines = static_cast<int>(renderer.wrappedText(fontFor(1), gloss.c_str(), innerW, 2).size());
+
+  fui::SheetProps sheet;
+  const int band = sheet.grabberMargin + sheet.grabberHeight + sheet.grabberInset;
+  int height = band + titleH + gap + glossLines * bodyH + gap;
+  if (showReview) height += smallH + gap;
+  if (!status.empty()) height += smallH + gap;
+  height += theme.rowHeight + gap;  // destination row
+  height += theme.rowHeight + gap;  // buttons
+
+  // The strip is at the bottom, unless the word sits under it: then it hangs from the top.
   bool top = false;
   for (const auto& b : tap.linkBoxes) {
     if (b.y + b.h > h - height - 8) top = true;
   }
-  strip = ui::Box{0, top ? 0 : h - height, w, height};
-  renderer.fillRect(strip.x, strip.y, strip.w, strip.h, false);
-  renderer.fillRect(0, top ? strip.y + strip.h - 3 : strip.y, w, 3, true);
+  sheet.anchor = top ? fui::SheetEdge::Top : fui::SheetEdge::Bottom;
+  sheet.dismissAction = ui::ACTION_ITEM;  // a tap outside the sheet: onAction(ID_CLOSE)
+  ui.sheet(sheet, static_cast<int16_t>(height));
 
-  int y = strip.y + 18;
-  const std::string lemmaText = renderer.truncatedText(ui::fontTitle(), lemma.c_str(), innerW - 130, EpdFontFamily::BOLD);
-  renderer.drawText(ui::fontTitle(), padX, y, lemmaText.c_str(), true, EpdFontFamily::BOLD);
-  int x = padX + renderer.getTextWidth(ui::fontTitle(), lemmaText.c_str(), EpdFontFamily::BOLD) + 10;
-  const char* chipLabel = mode == Mode::InBank ? "NO BANCO" : mode == Mode::Saved ? "SALVO" : nullptr;
-  const int chipW = chipLabel ? renderer.getTextWidth(SMALL_FONT_ID, chipLabel, EpdFontFamily::BOLD) + 16 : 0;
+  // Lemma, its note, and where it stands.
+  const fui::Rect head = ui.takeTop(static_cast<int16_t>(titleH), gap);
+  const int x0 = head.x + side;
+  const char* tag = mode == Mode::InBank ? "NO BANCO" : mode == Mode::Saved ? "SALVO" : nullptr;
+  const int tagW = tag ? renderer.getTextWidth(fontFor(0), tag, EpdFontFamily::BOLD) + 2 * gap : 0;
+  const std::string lemmaText = renderer.truncatedText(fontFor(2), lemma.c_str(), innerW - tagW - gap, EpdFontFamily::BOLD);
+  ui.target().text(fui::Rect{static_cast<int16_t>(x0), head.y, static_cast<int16_t>(innerW), head.height}, lemmaText.c_str(),
+                   style(ui, 2, true));
   if (!pos.empty()) {
-    const int posMax = w - padX - x - (chipW ? chipW + 10 : 0);
+    const int lw = renderer.getTextWidth(fontFor(2), lemmaText.c_str(), EpdFontFamily::BOLD) + gap;
+    const int posMax = innerW - lw - (tagW ? tagW + gap : 0);
     if (posMax > 30) {
-      const std::string p = renderer.truncatedText(ui::fontSmall(), pos.c_str(), posMax, EpdFontFamily::ITALIC);
-      renderer.drawText(ui::fontSmall(), x, y + lemmaH - renderer.getLineHeight(ui::fontSmall()) - 2, p.c_str(), true,
-                        EpdFontFamily::ITALIC);
+      const std::string p = renderer.truncatedText(fontFor(0), pos.c_str(), posMax);
+      ui.target().text(fui::Rect{static_cast<int16_t>(x0 + lw), head.y, static_cast<int16_t>(posMax), head.height}, p.c_str(),
+                       style(ui, 0));
     }
   }
-  if (chipLabel) ui::chip(renderer, w - padX - chipW, y + (lemmaH - renderer.getLineHeight(SMALL_FONT_ID) - 6) / 2, chipLabel);
-  y += lemmaH + 4;
-  for (const auto& line : glossLines) {
-    renderer.drawText(ui::fontLarge(), padX, y, line.c_str(), true);
-    y += renderer.getLineHeight(ui::fontLarge());
+  if (tag) {
+    const fui::Rect tagRect{static_cast<int16_t>(x0 + innerW - tagW), static_cast<int16_t>(head.y + (head.height - smallH - 8) / 2),
+                            static_cast<int16_t>(tagW), static_cast<int16_t>(smallH + 8)};
+    ui.target().stroke(tagRect, fui::Paint::solid(fui::Color::Black), 1, 4);
+    ui.target().text(tagRect, tag, style(ui, 0, true, fui::TextAlign::Center));
   }
-  y += 10;
+
+  paragraph(ui, gloss, 1, false, fui::TextAlign::Left, 2);
+  ui.spacer(gap);
   if (showReview) {
-    renderer.drawText(ui::fontSmall(), padX, y, nextReview.c_str(), true);
-    y += renderer.getLineHeight(ui::fontSmall()) + 10;
+    paragraph(ui, nextReview, 0);
+    ui.spacer(gap);
   }
   if (!status.empty()) {
-    renderer.drawText(ui::fontSmall(), padX, y, status.c_str(), true, EpdFontFamily::BOLD);
-    y += renderer.getLineHeight(ui::fontSmall()) + 8;
+    paragraph(ui, status, 0, true);
+    ui.spacer(gap);
   }
+
   // Destination deck; with more than one study language a tap switches it for this book.
-  {
-    const std::string deck = languageName(language);  // "Italiano": the deck name is too long here
-    const char* prefix = mode == Mode::New ? "Salvar em" : mode == Mode::Saved ? "Salvo em" : "No baralho";
-    // Only before saving: a word already in the bank has had its `seen` recorded in this deck.
-    const bool canSwitch = languages.size() > 1 && mode == Mode::New;
-    const char* hint = "trocar";
-    const int hintW = canSwitch ? renderer.getTextWidth(ui::fontSmall(), hint, EpdFontFamily::BOLD) + 20 : 0;
-    const int prefixW = renderer.getTextWidth(ui::fontSmall(), prefix) + 6;
-    const std::string deckText =
-        renderer.truncatedText(ui::fontSmall(), deck.c_str(), innerW - prefixW - hintW - 12, EpdFontFamily::BOLD);
-    const int ty = y + (langRowH - smallH) / 2 - 2;
-    renderer.drawText(ui::fontSmall(), padX, ty, prefix, true);
-    renderer.drawText(ui::fontSmall(), padX + prefixW, ty, deckText.c_str(), true, EpdFontFamily::BOLD);
-    if (canSwitch) {
-      const int hx = w - padX - hintW;
-      renderer.drawRect(hx, y + 2, hintW, langRowH - 6, 2, true);
-      renderer.drawText(ui::fontSmall(), hx + 10, ty, hint, true, EpdFontFamily::BOLD);
-      langBox = ui::Box{padX, y, innerW, langRowH};
-    } else {
-      langBox = ui::Box{};
-    }
-    y += langRowH + 4;
+  const fui::Rect dest = ui.takeTop(theme.rowHeight, gap);
+  const char* prefix = mode == Mode::New ? "Salvar em" : mode == Mode::Saved ? "Salvo em" : "No baralho";
+  const std::string deckName = languageName(language);  // "Italiano": the deck name is too long here
+  const int switchW = canSwitch ? renderer.getTextWidth(fontFor(1), "trocar", EpdFontFamily::BOLD) + 4 * gap : 0;
+  ui.target().text(fui::Rect{static_cast<int16_t>(dest.x + side), dest.y,
+                             static_cast<int16_t>(innerW - switchW - (switchW ? gap : 0)), dest.height},
+                   (std::string(prefix) + " " + deckName).c_str(), style(ui, 1));
+  if (canSwitch) {
+    button(ui, fui::Rect{static_cast<int16_t>(dest.x + side + innerW - switchW), dest.y, static_cast<int16_t>(switchW), dest.height},
+           "trocar", ID_LANG);
   }
+
+  const fui::Rect buttons = ui.takeTop(theme.rowHeight, gap);
   if (canSave()) {
-    const int gap = 10;
     const int saveW = (innerW - gap) * 2 / 3;
-    saveBox = ui::button(renderer, ui::Box{padX, y, saveW, ui::BUTTON_H}, mode == Mode::New ? "Salvar" : "Salvar encontro",
-                         true);
-    closeBox = ui::button(renderer, ui::Box{padX + saveW + gap, y, innerW - saveW - gap, ui::BUTTON_H}, "Fechar", false);
+    button(ui, fui::Rect{static_cast<int16_t>(buttons.x + side), buttons.y, static_cast<int16_t>(saveW), buttons.height},
+           mode == Mode::New ? "Salvar" : "Salvar encontro", ID_SAVE, true);
+    button(ui, fui::Rect{static_cast<int16_t>(buttons.x + side + saveW + gap), buttons.y,
+                         static_cast<int16_t>(innerW - saveW - gap), buttons.height},
+           "Fechar", ID_CLOSE);
+    if (focusedId() < 0) setFocus(ID_SAVE);
   } else {
-    saveBox = ui::Box{};
-    closeBox = ui::button(renderer, ui::Box{padX, y, innerW, ui::BUTTON_H}, "Fechar", false);
+    button(ui, fui::Rect{static_cast<int16_t>(buttons.x + side), buttons.y, static_cast<int16_t>(innerW), buttons.height},
+           "Fechar", ID_CLOSE, true);
+    if (focusedId() < 0) setFocus(ID_CLOSE);
   }
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
 }  // namespace linguetta
