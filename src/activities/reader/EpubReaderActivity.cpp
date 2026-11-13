@@ -75,6 +75,7 @@
 #include "components/TouchHeaderBackButton.h"
 #endif
 #include "fontIds.h"
+#include "linguetta/reader/WordLensReader.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookMoveUtils.h"
 #include "util/Dictionary.h"
@@ -2355,6 +2356,7 @@ void EpubReaderActivity::onEnter() {
 
   BOOKMARKS.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), "epub");
   CLIPPINGS.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), "epub");
+  linguetta::wordlens::openBook(epub->getPath(), epub->getLanguage());  // Linguetta
 
   uint16_t restartPageBuildSpine = UINT16_MAX;
   uint16_t restartPageBuildTarget = 0;
@@ -2508,6 +2510,7 @@ void EpubReaderActivity::onExit() {
 
   BOOKMARKS.unload();
   CLIPPINGS.unload();
+  linguetta::wordlens::closeBook();  // Linguetta
   section.reset();
   if (epub && !saveLinkStack()) {
     LOG_ERR("ERS", "Failed to save link return stack on exit");
@@ -3105,6 +3108,9 @@ void EpubReaderActivity::loop() {
 
 #if CROSSINK_APP_CAP_TOUCH
   if (!atEndOfBook && touch.tapped && handleTouchFootnoteLink(touch.x, touch.y)) {
+    return;
+  }
+  if (!atEndOfBook && touch.tapped && linguettaTouch(touch.x, touch.y)) {  // Linguetta
     return;
   }
 #endif
@@ -3843,6 +3849,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuAction action, const 
     }
     case EpubReaderMenuAction::FOOTNOTES: {
       openFootnoteSelect(returnToReaderMenu);
+      break;
+    }
+    case EpubReaderMenuAction::WORD_LENS: {  // Linguetta
+      linguettaWordLensPopup();
       break;
     }
     case EpubReaderMenuAction::GO_TO_PERCENT: {
@@ -5340,6 +5350,7 @@ void EpubReaderActivity::openFootnoteSelect(const bool returnToReaderMenu) {
       page = section->loadPageFromSectionFile();
       if (page) {
         layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
+        linguettaSplitBlend(page->footnotes);  // Linguetta: blend links are not footnotes
         targets =
             buildFootnoteLinkTargets(*page, page->footnotes, renderer, fontId, layout.marginTop, layout.marginLeft);
       }
@@ -6730,6 +6741,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     } else {
       currentPageFootnotes = std::move(p->footnotes);
     }
+    linguettaSplitBlend(currentPageFootnotes);
 
     const int renderFontId = activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
     if (!renderContents(std::move(p), renderFontId, layout.marginTop, layout.marginRight, layout.marginBottom,
@@ -7268,6 +7280,7 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
     const auto prewarmVisibleText = [&]() {
       pageRenderScope.emplace(*fcm, FontCacheManager::PreparationPolicy::Normal);
       page->renderText(renderer, fontId, orientedMarginLeft, orientedMarginTop);  // scan pass
+      linguetta::wordlens::draw(renderer, *page, fontId, orientedMarginLeft, orientedMarginTop, false);
       // The status-bar title can route to the same SD fallback as the page. Scan
       // it into this batch before rendering so it does not evict page glyphs.
       renderStatusBar();
@@ -7296,6 +7309,11 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   buildFootnoteTouchTargets(*page, fontId, orientedMarginTop, orientedMarginLeft);
 #endif
 
+  if (!activeFootnotePreview) {  // Linguetta: where the page is on screen, for taps on blend links / glosses
+    linguettaFontId = fontId;
+    linguettaMarginLeft = orientedMarginLeft;
+    linguettaMarginTop = orientedMarginTop;
+  }
   const bool pageHasImages = page->hasImages();
   const bool foregroundBlack = ReaderUtils::readerForegroundBlack();
   bool needsImageGrayscale = pageHasImages;
@@ -7329,6 +7347,7 @@ bool EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   const auto finalizeBufferComposition = [&]() {
     drawClippingHighlights(*page, fontId, orientedMarginTop, orientedMarginLeft);
     drawPublisherPageMarkers(renderer, *page, orientedMarginTop, contentBottom, foregroundBlack);
+    linguetta::wordlens::draw(renderer, *page, fontId, orientedMarginLeft, orientedMarginTop, true);  // Linguetta
 #if CROSSINK_APP_CAP_TOUCH
     if (activeFootnotePreview) {
       TouchHeaderBackButton::draw(renderer, TouchHeaderBackButton::headerRect(renderer, mappedInput), tr(STR_FOOTNOTES),

@@ -19,6 +19,7 @@
 #include "components/TouchRegistry.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#include "components/icons/linguettaIcons.h"  // Linguetta
 #include "components/icons/readingStatsIcons.h"
 #include "fontIds.h"
 
@@ -84,6 +85,8 @@ const freeink::Icon* LyraTheme::iconForName(UIIcon icon, uint32_t size) {
     switch (icon) {
       case UIIcon::Chart:
         return &icon_reading_stats_32;
+      case UIIcon::Flashcards:
+        return &icon_flashcards_32;  // Linguetta
       case UIIcon::Folder:
         return &icon_folder_32;
       case UIIcon::Book:

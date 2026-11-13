@@ -54,6 +54,7 @@ constexpr unsigned long HOME_BOOK_SWAP_LONG_PRESS_MS = 1000;
 constexpr int HOME_BOOK_SWAP_RECENT_COUNT = 2;
 
 enum class HomeMenuAction {
+  Flashcards,  // Linguetta
   BrowseFiles,
   ContinueReading,
   Library,
@@ -71,7 +72,7 @@ struct HomeMenuEntry {
 };
 
 struct HomeMenuEntries {
-  static constexpr int kCapacity = 8;
+  static constexpr int kCapacity = 9;  // Linguetta: +Flashcards
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -235,6 +236,7 @@ const char* savedItemsLabel(bool hasBookmarks, bool hasClippings) {
 
 void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasReadingStats, bool hasBookmarks,
                          bool hasClippings) {
+  items.push({"Flashcards", Flashcards, HomeMenuAction::Flashcards});  // Linguetta: first entry
   items.push({tr(STR_BROWSE_FILES), Folder, HomeMenuAction::BrowseFiles});
   items.push({tr(STR_LIBRARY), Library, HomeMenuAction::Library});
 
@@ -260,6 +262,7 @@ HomeMenuEntries buildHomeMenuItems(bool hasOpdsServers, bool hasReadingStats, bo
 
 HomeMenuEntries buildMinimalMenuItems(bool hasOpdsServers, bool hasReadingStats, bool hasBookmarks, bool hasClippings) {
   HomeMenuEntries items;
+  items.push({"Flashcards", Flashcards, HomeMenuAction::Flashcards});  // Linguetta
   if (SETTINGS.isLibraryFileBrowserSwapped()) {
     items.push({tr(STR_BROWSE_FILES), Folder, HomeMenuAction::BrowseFiles});
   } else {
@@ -292,6 +295,8 @@ HomeMenuEntries buildSelectableHomeMenuItems(bool hasOpdsServers, bool hasReadin
 
 HomeMenuAction homeActionForInitialMenuItem(HomeMenuItem item) {
   switch (item) {
+    case HomeMenuItem::FLASHCARDS:
+      return HomeMenuAction::Flashcards;
     case HomeMenuItem::FILE_BROWSER:
       return HomeMenuAction::BrowseFiles;
     case HomeMenuItem::LIBRARY:
@@ -531,7 +536,7 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
 int HomeActivity::getMenuItemCount() const {
   if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 5 : 4);
   const auto& metrics = UITheme::getInstance().getMetrics();
-  int count = 4;  // File Browser, Library, File transfer, Settings
+  int count = 5;  // Flashcards (Linguetta), File Browser, Library, File transfer, Settings
   if (!metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     count += getVisibleRecentBookCount();
   } else if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
@@ -896,6 +901,7 @@ void HomeActivity::onEnter() {
       case HomeMenuItem::SETTINGS_MENU:
         selectorIndex = base + (hasOpdsServers ? 4 : 3);
         break;
+      case HomeMenuItem::FLASHCARDS:  // Linguetta: not in the cover grid's tab bar
       case HomeMenuItem::NONE:
         break;
     }
@@ -1457,6 +1463,9 @@ void HomeActivity::loop() {
 
       auto activateMinimalMenuAction = [this, &menuItems]() {
         switch (menuItems[minimalMenuIndex].action) {
+          case HomeMenuAction::Flashcards:
+            onFlashcardsOpen();
+            break;
           case HomeMenuAction::BrowseFiles:
             onFileBrowserOpen();
             break;
@@ -1699,6 +1708,9 @@ void HomeActivity::loop() {
 
   auto activateHomeMenuAction = [this](const HomeMenuAction action) {
     switch (action) {
+      case HomeMenuAction::Flashcards:
+        onFlashcardsOpen();
+        break;
       case HomeMenuAction::BrowseFiles:
         onFileBrowserOpen();
         break;
@@ -2328,6 +2340,8 @@ void HomeActivity::onContinueReading() {
 void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
 
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
+
+void HomeActivity::onFlashcardsOpen() { activityManager.goToFlashcards(); }  // Linguetta
 
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 

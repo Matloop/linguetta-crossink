@@ -25,6 +25,10 @@
 #include "activities/Activity.h"
 #include "activities/reader/TouchReaderPreviewModel.h"
 #include "components/OptionPopup.h"
+
+namespace linguetta {
+struct BlendTap;
+}
 #if CROSSINK_APP_CAP_TOUCH
 #include "activities/reader/ReaderPinchGesture.h"
 #endif
@@ -431,6 +435,14 @@ class EpubReaderActivity final : public Activity {
   void openQuickActionsPopup();
   void executeFootnoteQuickAction(bool suppressInitialPowerRelease = false);
   void openFootnoteSelect(bool returnToReaderMenu);
+  // Linguetta (src/linguetta/reader/EpubReaderBlend.cpp): blend links, Word Lens, see LINGUETTA.md.
+  std::vector<FootnoteEntry> linguettaBlendLinks;  // "#lb:" links of the current page (not footnotes)
+  void linguettaSplitBlend(std::vector<FootnoteEntry>& footnotes);
+  bool linguettaTouch(int x, int y);  // a tap on a blend link or a glossed word
+  void linguettaOpenFooter(std::unique_ptr<Page> page, linguetta::BlendTap&& tap, int marginLeft, int marginTop);
+  void linguettaWordLensRelayout();  // rebuild the section if the Word Lens level moved the spacing
+  void linguettaWordLensPopup();
+  int linguettaFontId = 0, linguettaMarginLeft = 0, linguettaMarginTop = 0;  // of the last drawn page
 #if CROSSINK_APP_CAP_TOUCH
   bool handlePinchFontResize();
   void resetPinchFontGesture();

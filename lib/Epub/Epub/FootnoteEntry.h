@@ -4,7 +4,7 @@
 #include <cstring>
 
 #define FOOTNOTE_NUMBER_LEN 32
-#define FOOTNOTE_HREF_LEN 96
+#define FOOTNOTE_HREF_LEN 256  // Linguetta: "#lb:" blend hrefs carry lemma|translation|... (up to 255 bytes)
 inline constexpr uint16_t EPUB_MAX_FOOTNOTES_PER_PAGE = 16;
 
 struct FootnoteEntry {

@@ -23,6 +23,7 @@
 #include "QuickActions.h"
 #include "SettingsList.h"
 #include "fontIds.h"
+#include "linguetta/reader/WordLensReader.h"
 #include "util/FrontlightSchedule.h"
 #include "util/ReaderStatusBarJson.h"
 #include "util/TwoFingerSwipe.h"
@@ -1178,7 +1179,8 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
                                                       const EpubRenderMode renderMode) const {
   ReaderRenderSpec spec;
   spec.fontId = getReaderFontId();
-  spec.lineCompression = getReaderLineCompression();
+  // Linguetta Word Lens needs room between lines for its glosses (floor while active).
+  spec.lineCompression = linguetta::wordlens::lineCompression(getReaderLineCompression());
   spec.extraParagraphSpacing = extraParagraphSpacing != 0;
   spec.forceParagraphIndents = forceParagraphIndents != 0;
   spec.paragraphAlignment = paragraphAlignment;

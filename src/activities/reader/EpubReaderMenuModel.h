@@ -35,6 +35,7 @@ enum class EpubReaderMenuAction : uint8_t {
   SET_BOOK_DICTIONARY,
   STATUS_BAR_SETTINGS,
   RESET_BOOK_READER_SETTINGS,
+  WORD_LENS,  // Linguetta: gloss level popup
 };
 
 enum class ReaderDrawerTab : uint8_t { Font = 0, Layout = 1, More = 2, Location = 3, Settings = 4, Count };
@@ -150,6 +151,7 @@ enum class ReaderDrawerCatalogItem : uint8_t {
   SyncProgress,
   NearbyPositionSync,
   SendNearbyBook,
+  WordLens,  // Linguetta
 };
 
 struct ReaderDrawerAvailability {
@@ -162,6 +164,7 @@ struct ReaderDrawerAvailability {
   bool buttonDevice = false;
   bool globalStatsEnabled = true;
   bool bookStatsEnabled = true;
+  bool wordLens = false;  // Linguetta: the device has a study language
 };
 
 struct ReaderDrawerTabCatalog {
@@ -206,6 +209,7 @@ constexpr ReaderDrawerCatalog makeReaderDrawerCatalog(const ReaderDrawerAvailabi
   if (available.buttonDevice && available.globalStatsEnabled && available.bookStatsEnabled)
     more.add(ReaderDrawerCatalogItem::ReadingStats);
   if (available.hasFootnotes) more.add(ReaderDrawerCatalogItem::Footnotes);
+  if (available.wordLens) more.add(ReaderDrawerCatalogItem::WordLens);
 
   auto& location = catalog[static_cast<size_t>(ReaderDrawerTab::Location)];
   location.add(ReaderDrawerCatalogItem::BookmarkToggle);

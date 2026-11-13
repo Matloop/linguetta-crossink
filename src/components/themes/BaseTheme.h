@@ -170,7 +170,8 @@ enum UIIcon {
   Opds,
   Wifi,
   Hotspot,
-  Chart
+  Chart,
+  Flashcards  // Linguetta
 };
 
 // Default theme implementation (Classic Theme)

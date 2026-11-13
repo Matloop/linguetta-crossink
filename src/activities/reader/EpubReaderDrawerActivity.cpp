@@ -19,6 +19,7 @@
 #include <cstring>
 #include <iterator>
 
+#include "linguetta/reader/WordLensReader.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "DeviceCapabilities.h"
@@ -448,7 +449,7 @@ void EpubReaderDrawerActivity::onEnter() {
 
   const ReaderDrawerCatalog catalog = makeReaderDrawerCatalog(
       {hasFootnotes, hasDictionary, hasBookmarks, hasClippings, showReadingPaceReset, stablePageCount > 0,
-       !mappedInput.hasTouchHardware(), globalStatsEnabled, bookStatsEnabled});
+       !mappedInput.hasTouchHardware(), globalStatsEnabled, bookStatsEnabled, linguetta::wordlens::available()});
   for (size_t tab = 0; tab < rootRows.size(); ++tab) {
     rootRows[tab].reserve(catalog[tab].count);
     rootRows[tab].assign(catalog[tab].items.begin(), catalog[tab].items.begin() + catalog[tab].count);
@@ -1823,6 +1824,9 @@ void EpubReaderDrawerActivity::activateRow(const RowId row) {
     case RowId::LookupHistory:
       action = EpubReaderMenuAction::LOOKUP_HISTORY;
       break;
+    case RowId::WordLens:
+      action = EpubReaderMenuAction::WORD_LENS;
+      break;
     case RowId::SaveClipping:
       action = EpubReaderMenuAction::SAVE_CLIPPING;
       break;
@@ -3013,6 +3017,8 @@ const char* EpubReaderDrawerActivity::rowLabel(const RowId row) const {
       return tr(STR_LOOKUP);
     case RowId::LookupHistory:
       return tr(STR_LOOKUP_HISTORY);
+    case RowId::WordLens:
+      return "Word Lens";  // Linguetta
     case RowId::SaveClipping:
       return tr(STR_SAVE_CLIPPING);
     case RowId::ViewClippings:
@@ -3083,6 +3089,8 @@ const char* EpubReaderDrawerActivity::rowLabel(const RowId row) const {
 
 const char* EpubReaderDrawerActivity::rowValue(const RowId row, char* buffer, const size_t bufferSize) const {
   switch (row) {
+    case RowId::WordLens:
+      return linguetta::lens::levelLabel(linguetta::wordlens::level());  // Linguetta
     case RowId::FontFamily: {
       if (draft.sdFontFamilyName[0] != '\0') return draft.sdFontFamilyName.data();
       static constexpr std::array<StrId, CrossPointSettings::BUILTIN_FONT_COUNT> labels = {StrId::STR_LEXEND_DECA,

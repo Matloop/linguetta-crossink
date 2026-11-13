@@ -46,6 +46,7 @@
 #include "util/FullScreenMessageActivity.h"
 #include "util/SwipeAdjustment.h"
 #include "util/TwoFingerSwipe.h"
+#include "linguetta/flashcards/DeckListActivity.h"
 
 namespace {
 constexpr uint32_t FILE_TRANSFER_MODE_MASK = 0xFF;
@@ -935,6 +936,8 @@ void ActivityManager::goToNearbyStatsSync() {
   replaceActivity(std::make_unique<NearbyStatsSyncActivity>(renderer, mappedInput));
 }
 
+void ActivityManager::goToFlashcards() { replaceActivity(linguetta::makeDeckListActivity(renderer, mappedInput)); }  // Linguetta
+
 void ActivityManager::goToSettings(const bool dismissOnUpSwipe) {
   preferredHomeBookPath.clear();
   returningHomeThroughSettings = false;
@@ -1073,6 +1076,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, const HalDisplay::Ref
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
+    } else if (activityName == "LinguettaDecks") {
+      initialMenuItem = HomeMenuItem::FLASHCARDS;  // Linguetta
     }
   }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, initialRefreshMode,
